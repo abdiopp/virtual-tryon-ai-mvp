@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Environments
+.venv/
+.env
+
+# Editors
+.vscode/
+.idea/
+
+# Runtime
+*.log
+.DS_Store
+
+# Model artifacts
+models/huggingface/
+models/catvton/
+models/models/
+models/loras/
+models/fashn_vton/
+models/fashn_weights/
+
+# Outputs/uploads
+outputs/generated_clothes/*
+!outputs/generated_clothes/.gitkeep
+outputs/tryon_results/*
+!outputs/tryon_results/.gitkeep
+uploads/persons/*
+!uploads/persons/.gitkeep
+uploads/garments/*
+!uploads/garments/.gitkeep

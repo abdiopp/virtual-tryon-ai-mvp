@@ -1,0 +1,266 @@
+"""FASHN VTON subprocess wrapper service for virtual try-on."""
+
+from __future__ import annotations
+
+import os
+import select
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from app.config import Settings, get_settings
+from app.services.storage_service import StorageService
+from app.utils.device import resolve_device
+from app.utils.image_utils import ensure_image_exists
+from app.utils.logging_utils import get_logger
+
+CATEGORY_MAP = {
+    "upper_body": "tops",
+    "lower_body": "bottoms",
+    "dress": "one-pieces",
+    "dresses": "one-pieces",
+    "upper": "tops",
+    "lower": "bottoms",
+    "overall": "one-pieces",
+    "tops": "tops",
+    "bottoms": "bottoms",
+    "one-pieces": "one-pieces",
+}
+
+
+class TryOnSetupError(RuntimeError):
+    """Raised when try-on setup is incomplete or incompatible."""
+
+
+@dataclass
+class VirtualTryOnResult:
+    """Result payload returned by try-on service."""
+
+    result_path: str
+    metadata: dict[str, str | int | float]
+
+
+class FashnTryOnService:
+    """Service that calls FASHN VTON inference through subprocess."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self.storage = StorageService(self.settings)
+        self.logger = get_logger(__name__)
+        self.runtime_device = resolve_device(self.settings.device)
+
+    def is_model_available(self) -> bool:
+        """Check if FASHN repo and required files are present."""
+
+        repo_dir = self.settings.fashn_model_dir
+        required_repo_files = [
+            repo_dir / "examples" / "basic_inference.py",
+            repo_dir / "src" / "fashn_vton" / "__init__.py",
+        ]
+        required_weights = [
+            self.settings.fashn_weights_dir / "model.safetensors",
+            self.settings.fashn_weights_dir / "dwpose" / "yolox_l.onnx",
+            self.settings.fashn_weights_dir / "dwpose" / "dw-ll_ucoco_384.onnx",
+        ]
+
+        return all(path.exists() for path in [*required_repo_files, *required_weights])
+
+    def _normalize_category(self, category: str) -> str:
+        normalized = category.strip().lower()
+        if normalized not in CATEGORY_MAP:
+            raise ValueError(
+                "Invalid category. Use one of: upper_body, lower_body, dress."
+            )
+        return CATEGORY_MAP[normalized]
+
+    def _validate_setup(self) -> None:
+        repo_dir = self.settings.fashn_model_dir
+        inference_script = repo_dir / "examples" / "basic_inference.py"
+        if not inference_script.exists():
+            raise TryOnSetupError(
+                "FASHN VTON inference script not found. Run `python scripts/download_models.py --only-tryon` "
+                "to clone the repository and download required files."
+            )
+
+        missing_weights: list[Path] = []
+        for path in [
+            self.settings.fashn_weights_dir / "model.safetensors",
+            self.settings.fashn_weights_dir / "dwpose" / "yolox_l.onnx",
+            self.settings.fashn_weights_dir / "dwpose" / "dw-ll_ucoco_384.onnx",
+        ]:
+            if not path.exists():
+                missing_weights.append(path)
+
+        if missing_weights:
+            joined = "\n".join(f"- {path}" for path in missing_weights)
+            raise TryOnSetupError(
+                "FASHN VTON weights are missing:\n"
+                f"{joined}\n"
+                "Run `python scripts/download_models.py --only-tryon` and retry."
+            )
+
+    def _run_subprocess_with_live_logs(
+        self,
+        command: list[str],
+        cwd: Path,
+        env: dict[str, str],
+        heartbeat_seconds: int = 15,
+    ) -> list[str]:
+        """Run subprocess with streaming logs and periodic heartbeat."""
+
+        captured_lines: list[str] = []
+        started_at = time.time()
+        last_heartbeat = started_at
+
+        with subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        ) as process:
+            if process.stdout is None:
+                raise TryOnSetupError("Failed to capture try-on subprocess output stream.")
+
+            while True:
+                ready_streams, _, _ = select.select([process.stdout], [], [], 1.0)
+                if ready_streams:
+                    line = process.stdout.readline()
+                    if line:
+                        cleaned = line.rstrip()
+                        captured_lines.append(cleaned)
+                        self.logger.info("[tryon] %s", cleaned)
+                    elif process.poll() is not None:
+                        break
+                elif process.poll() is not None:
+                    break
+
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_seconds:
+                    self.logger.info(
+                        "Try-on is still running... elapsed=%.1fs",
+                        now - started_at,
+                    )
+                    last_heartbeat = now
+
+            return_code = process.wait()
+            if return_code != 0:
+                joined_output = "\n".join(captured_lines)
+                raise TryOnSetupError(
+                    "FASHN VTON inference failed. Ensure dependencies are installed.\n"
+                    "Install helper:\n"
+                    "pip install einops tqdm matplotlib onnxruntime fashn-human-parser\n"
+                    "Command:\n"
+                    f"{' '.join(command)}\n"
+                    f"OUTPUT:\n{joined_output}"
+                )
+
+        return captured_lines
+
+    def run_tryon(
+        self,
+        person_image_path: Path | str,
+        garment_image_path: Path | str,
+        category: str = "upper_body",
+        output_path: Path | None = None,
+    ) -> VirtualTryOnResult:
+        """Run FASHN VTON inference and return final try-on image path."""
+
+        self._validate_setup()
+
+        person_path = ensure_image_exists(person_image_path)
+        garment_path = ensure_image_exists(garment_image_path)
+
+        normalized_category = self._normalize_category(category)
+        target_output_path = output_path or self.storage.build_output_path(
+            subfolder="tryon_results",
+            prefix="tryon_result",
+            extension=".png",
+        )
+
+        repo_dir = self.settings.fashn_model_dir
+        inference_script = repo_dir / "examples" / "basic_inference.py"
+
+        with TemporaryDirectory(prefix="fashn_vton_output_") as temp_dir_str:
+            temp_dir = Path(temp_dir_str)
+            command = [
+                sys.executable,
+                "-u",
+                str(inference_script),
+                "--weights-dir",
+                str(self.settings.fashn_weights_dir.resolve()),
+                "--person-image",
+                str(person_path.resolve()),
+                "--garment-image",
+                str(garment_path.resolve()),
+                "--category",
+                normalized_category,
+                "--garment-photo-type",
+                self.settings.fashn_garment_photo_type,
+                "--output-dir",
+                str(temp_dir),
+                "--num-samples",
+                str(self.settings.fashn_num_samples),
+                "--num-timesteps",
+                str(self.settings.fashn_num_timesteps),
+                "--guidance-scale",
+                str(self.settings.fashn_guidance_scale),
+                "--seed",
+                "42",
+                "--device",
+                "cuda" if self.runtime_device == "cuda" else "cpu",
+            ]
+
+            if not self.settings.fashn_segmentation_free:
+                command.append("--no-segmentation-free")
+
+            env = dict(**os.environ)
+            src_path = str((repo_dir / "src").resolve())
+            env["PYTHONPATH"] = f"{src_path}:{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else src_path
+
+            self.logger.info("Running FASHN VTON command: %s", " ".join(command))
+            self.logger.info(
+                "Try-on runtime device=%s (intel iGPU and Mac fallback run on CPU mode)",
+                self.runtime_device,
+            )
+            self.logger.info(
+                "Try-on request: category=%s person=%s garment=%s",
+                normalized_category,
+                person_path,
+                garment_path,
+            )
+
+            self._run_subprocess_with_live_logs(
+                command=command,
+                cwd=repo_dir,
+                env=env,
+            )
+
+            candidates = sorted(temp_dir.glob("output_*.png"))
+            if not candidates:
+                raise TryOnSetupError(
+                    "FASHN VTON finished without output image. "
+                    f"Checked: {temp_dir}"
+                )
+
+            predicted_path = candidates[0]
+            target_output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(predicted_path, target_output_path)
+            self.logger.info("Try-on output saved to %s", target_output_path)
+
+        return VirtualTryOnResult(
+            result_path=str(target_output_path),
+            metadata={
+                "category": normalized_category,
+                "source_person": str(person_path),
+                "source_garment": str(garment_path),
+                "tryon_backend": "fashn_vton",
+                "runtime_device": self.runtime_device,
+            },
+        )
