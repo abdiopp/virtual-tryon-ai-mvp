@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -103,6 +104,53 @@ class FashnTryOnService:
                 "Run `python scripts/download_models.py --only-tryon` and retry."
             )
 
+    def _extract_progress_from_line(self, line: str) -> float | None:
+        """Pull a progress percentage from subprocess output if it is present."""
+
+        percent_match = re.search(r"(?P<percent>\d{1,3}(?:\.\d+)?)%", line)
+        if percent_match:
+            percent = float(percent_match.group("percent"))
+            if 0.0 <= percent <= 100.0:
+                return percent
+
+        fraction_match = re.search(r"(?P<current>\d+)\s*/\s*(?P<total>\d+)", line)
+        if fraction_match:
+            current = float(fraction_match.group("current"))
+            total = float(fraction_match.group("total"))
+            if total > 0:
+                return min(100.0, (current / total) * 100.0)
+
+        return None
+
+    def _log_progress_update(
+        self,
+        *,
+        progress_percent: float | None,
+        started_at: float,
+        message: str,
+    ) -> None:
+        """Emit a normalized progress line with elapsed and ETA when possible."""
+
+        elapsed = time.monotonic() - started_at
+        if progress_percent is None:
+            self.logger.info("%s | elapsed=%.1fs eta=unknown", message, elapsed)
+            return
+
+        progress_ratio = max(0.0, min(progress_percent / 100.0, 1.0))
+        eta_seconds = None
+        if progress_ratio > 0.0:
+            total_estimate = elapsed / progress_ratio
+            eta_seconds = max(0.0, total_estimate - elapsed)
+
+        eta_text = f"{eta_seconds:.1f}s" if eta_seconds is not None else "unknown"
+        self.logger.info(
+            "%s | progress=%.0f%% elapsed=%.1fs eta=%s",
+            message,
+            progress_percent,
+            elapsed,
+            eta_text,
+        )
+
     def _run_subprocess_with_live_logs(
         self,
         command: list[str],
@@ -113,8 +161,9 @@ class FashnTryOnService:
         """Run subprocess with streaming logs and periodic heartbeat."""
 
         captured_lines: list[str] = []
-        started_at = time.time()
+        started_at = time.monotonic()
         last_heartbeat = started_at
+        last_progress_percent: float | None = None
 
         with subprocess.Popen(
             command,
@@ -136,17 +185,34 @@ class FashnTryOnService:
                         cleaned = line.rstrip()
                         captured_lines.append(cleaned)
                         self.logger.info("[tryon] %s", cleaned)
+                        progress_percent = self._extract_progress_from_line(cleaned)
+                        if progress_percent is not None and (
+                            last_progress_percent is None or progress_percent > last_progress_percent
+                        ):
+                            last_progress_percent = progress_percent
+                            self._log_progress_update(
+                                progress_percent=progress_percent,
+                                started_at=started_at,
+                                message="Try-on progress update",
+                            )
                     elif process.poll() is not None:
                         break
                 elif process.poll() is not None:
                     break
 
-                now = time.time()
+                now = time.monotonic()
                 if now - last_heartbeat >= heartbeat_seconds:
-                    self.logger.info(
-                        "Try-on is still running... elapsed=%.1fs",
-                        now - started_at,
-                    )
+                    if last_progress_percent is None:
+                        self.logger.info(
+                            "Try-on heartbeat: still running | elapsed=%.1fs eta=unknown",
+                            now - started_at,
+                        )
+                    else:
+                        self._log_progress_update(
+                            progress_percent=last_progress_percent,
+                            started_at=started_at,
+                            message="Try-on heartbeat",
+                        )
                     last_heartbeat = now
 
             return_code = process.wait()
@@ -176,6 +242,7 @@ class FashnTryOnService:
 
         person_path = ensure_image_exists(person_image_path)
         garment_path = ensure_image_exists(garment_image_path)
+        request_started_at = time.monotonic()
 
         normalized_category = self._normalize_category(category)
         target_output_path = output_path or self.storage.build_output_path(
@@ -252,7 +319,8 @@ class FashnTryOnService:
             predicted_path = candidates[0]
             target_output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(predicted_path, target_output_path)
-            self.logger.info("Try-on output saved to %s", target_output_path)
+            elapsed_seconds = time.monotonic() - request_started_at
+            self.logger.info("Try-on output saved to %s in %.1fs", target_output_path, elapsed_seconds)
 
         return VirtualTryOnResult(
             result_path=str(target_output_path),
@@ -262,5 +330,7 @@ class FashnTryOnService:
                 "source_garment": str(garment_path),
                 "tryon_backend": "fashn_vton",
                 "runtime_device": self.runtime_device,
+                "generation_seconds": round(time.monotonic() - request_started_at, 3),
+                "request_seconds": round(time.monotonic() - request_started_at, 3),
             },
         )

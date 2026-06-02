@@ -305,6 +305,15 @@ class ClothGeneratorService:
         # MPS historically does not support torch.Generator("mps") reliably.
         return torch.Generator(device="cpu").manual_seed(seed)
 
+    def _format_eta_seconds(self, elapsed_seconds: float, progress_ratio: float) -> float | None:
+        """Estimate remaining time from the current progress ratio."""
+
+        if progress_ratio <= 0.0:
+            return None
+
+        total_estimate = elapsed_seconds / progress_ratio
+        return max(0.0, total_estimate - elapsed_seconds)
+
     def _run_pipeline_with_progress(
         self,
         pipeline: DiffusionPipeline,
@@ -316,20 +325,31 @@ class ClothGeneratorService:
         """Run pipeline and emit periodic step progress logs."""
 
         log_interval = max(1, total_steps // 4)
-        started_at = time.time()
+        started_at = time.monotonic()
+
+        self.logger.info(
+            "Cloth generation step tracking started image=%d/%d total_steps=%d",
+            image_index,
+            total_images,
+            total_steps,
+        )
 
         def _log_step(step_number: int) -> None:
             if step_number == 1 or step_number == total_steps or step_number % log_interval == 0:
-                elapsed = time.time() - started_at
-                percent = (step_number / total_steps) * 100
+                elapsed = time.monotonic() - started_at
+                progress_ratio = step_number / total_steps
+                percent = progress_ratio * 100
+                eta_seconds = self._format_eta_seconds(elapsed, progress_ratio)
+                eta_text = f"{eta_seconds:.1f}s" if eta_seconds is not None else "unknown"
                 self.logger.info(
-                    "Cloth generation progress image %d/%d step %d/%d (%.0f%%) elapsed=%.1fs",
+                    "Cloth generation progress image %d/%d step %d/%d (%.0f%%) elapsed=%.1fs eta=%s",
                     image_index,
                     total_images,
                     step_number,
                     total_steps,
                     percent,
                     elapsed,
+                    eta_text,
                 )
 
         def _step_end_callback(_pipe, step_index, _timestep, callback_kwargs):
@@ -389,7 +409,7 @@ class ClothGeneratorService:
 
         results: list[ClothGenerationResultItem] = []
         base_seed = seed if seed is not None else random.randint(1, 2_000_000_000)
-        request_started_at = time.time()
+        request_started_at = time.monotonic()
         self.logger.info(
             "Starting cloth generation: model=%s device=%s count=%d size=%dx%d steps=%d guidance=%.2f",
             self.settings.cloth_model_id,
@@ -404,12 +424,13 @@ class ClothGeneratorService:
         for idx in range(tuned_count):
             item_seed = base_seed + idx if seed is not None else random.randint(1, 2_000_000_000)
             generator = self._build_generator(item_seed)
-            image_started_at = time.time()
+            image_started_at = time.monotonic()
             self.logger.info(
-                "Generating image %d/%d with seed=%d",
+                "Generating image %d/%d with seed=%d estimated_steps=%d",
                 idx + 1,
                 tuned_count,
                 item_seed,
+                tuned_steps,
             )
 
             pipe_kwargs: dict[str, object] = {
@@ -441,7 +462,7 @@ class ClothGeneratorService:
                 "Completed image %d/%d in %.1fs -> %s",
                 idx + 1,
                 tuned_count,
-                time.time() - image_started_at,
+                time.monotonic() - image_started_at,
                 output_path,
             )
 
@@ -460,12 +481,16 @@ class ClothGeneratorService:
                         "device": self.device,
                         "model_id": self.settings.cloth_model_id,
                         "performance_notes": " | ".join(notes) if notes else "none",
+                        "image_index": idx + 1,
+                        "total_images": tuned_count,
+                        "generation_seconds": round(time.monotonic() - image_started_at, 3),
+                        "request_seconds": round(time.monotonic() - request_started_at, 3),
                     },
                 )
             )
 
         self.logger.info(
             "Cloth generation request completed in %.1fs",
-            time.time() - request_started_at,
+            time.monotonic() - request_started_at,
         )
         return results

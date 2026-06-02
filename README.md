@@ -164,3 +164,4 @@ python scripts/virtual_tryon_cli.py \
 ## Notes
 
 - This local MVP is optimized for non-CUDA environments.
+- The API logs request start/end, progress, elapsed time, and ETA-style heartbeats for both cloth generation and virtual try-on so long-running calls are easier to monitor.
