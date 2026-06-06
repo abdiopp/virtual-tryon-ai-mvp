@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import re
-import select
 import shutil
 import subprocess
 import sys
 import time
+import queue
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -177,27 +178,39 @@ class FashnTryOnService:
             if process.stdout is None:
                 raise TryOnSetupError("Failed to capture try-on subprocess output stream.")
 
+            output_queue: queue.Queue[str] = queue.Queue()
+            reader_done = threading.Event()
+
+            def _drain_stdout() -> None:
+                try:
+                    for line in process.stdout:
+                        output_queue.put(line.rstrip())
+                finally:
+                    reader_done.set()
+
+            reader_thread = threading.Thread(target=_drain_stdout, daemon=True)
+            reader_thread.start()
+
             while True:
-                ready_streams, _, _ = select.select([process.stdout], [], [], 1.0)
-                if ready_streams:
-                    line = process.stdout.readline()
-                    if line:
-                        cleaned = line.rstrip()
-                        captured_lines.append(cleaned)
-                        self.logger.info("[tryon] %s", cleaned)
-                        progress_percent = self._extract_progress_from_line(cleaned)
-                        if progress_percent is not None and (
-                            last_progress_percent is None or progress_percent > last_progress_percent
-                        ):
-                            last_progress_percent = progress_percent
-                            self._log_progress_update(
-                                progress_percent=progress_percent,
-                                started_at=started_at,
-                                message="Try-on progress update",
-                            )
-                    elif process.poll() is not None:
-                        break
-                elif process.poll() is not None:
+                try:
+                    cleaned = output_queue.get(timeout=1.0)
+                except queue.Empty:
+                    cleaned = None
+
+                if cleaned is not None:
+                    captured_lines.append(cleaned)
+                    self.logger.info("[tryon] %s", cleaned)
+                    progress_percent = self._extract_progress_from_line(cleaned)
+                    if progress_percent is not None and (
+                        last_progress_percent is None or progress_percent > last_progress_percent
+                    ):
+                        last_progress_percent = progress_percent
+                        self._log_progress_update(
+                            progress_percent=progress_percent,
+                            started_at=started_at,
+                            message="Try-on progress update",
+                        )
+                elif reader_done.is_set() and process.poll() is not None and output_queue.empty():
                     break
 
                 now = time.monotonic()
@@ -215,6 +228,7 @@ class FashnTryOnService:
                         )
                     last_heartbeat = now
 
+            reader_thread.join(timeout=1.0)
             return_code = process.wait()
             if return_code != 0:
                 joined_output = "\n".join(captured_lines)
@@ -289,7 +303,12 @@ class FashnTryOnService:
 
             env = dict(**os.environ)
             src_path = str((repo_dir / "src").resolve())
-            env["PYTHONPATH"] = f"{src_path}:{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else src_path
+            existing_pythonpath = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = (
+                f"{src_path}{os.pathsep}{existing_pythonpath}"
+                if existing_pythonpath
+                else src_path
+            )
 
             self.logger.info("Running FASHN VTON command: %s", " ".join(command))
             self.logger.info(

@@ -32,13 +32,27 @@ A new Next.js App Router frontend lives in [`frontend/`](frontend/README.md). It
 
 ## Installation
 
+PowerShell:
+
 ```bash
-cd /Users/abdullah/Dev/Vton/virtual-tryon-ai-mvp
-python -m venv .venv
-source .venv/bin/activate
+cd <path-to-repo>
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cp .env.example .env
+Copy-Item .env.example .env
 ```
+
+Command Prompt:
+
+```bat
+cd <path-to-repo>
+py -3.10 -m venv .venv
+.\.venv\Scripts\activate.bat
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process RemoteSigned` and try again.
 
 ## Environment Variables
 

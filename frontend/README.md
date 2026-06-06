@@ -23,9 +23,19 @@ This folder contains a new Next.js 15 App Router frontend that integrates with t
 
 ## Setup
 
+PowerShell:
+
 ```bash
 cd frontend
-cp .env.example .env.local
+Copy-Item .env.example .env.local
+npm install
+```
+
+Command Prompt:
+
+```bat
+cd frontend
+copy .env.example .env.local
 npm install
 ```
 
@@ -70,4 +80,3 @@ npm run build
 - Axios is centralized in `lib/api/client.ts`.
 - Zod schemas in `lib/schemas.ts` validate all backend request and response payloads.
 - All backend calls use the original API shapes, so the backend can remain unchanged.
-
