@@ -38,6 +38,18 @@ CLOTH_ALLOW_PATTERNS = [
     "safety_checker/*",
 ]
 
+CLOTH_REQUIRED_FILES = [
+    "model_index.json",
+    "scheduler",
+    "tokenizer",
+    "unet/config.json",
+]
+
+CLOTH_WEIGHT_CANDIDATES = [
+    "unet/diffusion_pytorch_model.fp16.safetensors",
+    "unet/diffusion_pytorch_model.safetensors",
+]
+
 CLOTH_IGNORE_PATTERNS = [
     "*/model.onnx",
     "*/model.onnx_data",
@@ -157,12 +169,7 @@ def start_progress_logger(cache_dir: Path, stop_event: threading.Event, interval
 def validate_cloth_snapshot(snapshot_path: Path) -> None:
     """Validate minimum required files for diffusers text-to-image inference."""
 
-    must_exist = [
-        snapshot_path / "model_index.json",
-        snapshot_path / "scheduler",
-        snapshot_path / "tokenizer",
-        snapshot_path / "unet" / "config.json",
-    ]
+    must_exist = [snapshot_path / relative for relative in CLOTH_REQUIRED_FILES]
     missing = [path for path in must_exist if not path.exists()]
     if missing:
         joined = "\n".join(f"- {path}" for path in missing)
@@ -172,15 +179,22 @@ def validate_cloth_snapshot(snapshot_path: Path) -> None:
             "Retry `python scripts/download_models.py --only-clothes` to resume/repair cache."
         )
 
-    unet_candidates = [
-        snapshot_path / "unet" / "diffusion_pytorch_model.fp16.safetensors",
-        snapshot_path / "unet" / "diffusion_pytorch_model.safetensors",
-    ]
+    unet_candidates = [snapshot_path / relative for relative in CLOTH_WEIGHT_CANDIDATES]
     if not any(path.exists() for path in unet_candidates):
         raise RuntimeError(
             "Could not find UNet weights in cloth model snapshot. "
             f"Expected one of: {[str(path) for path in unet_candidates]}"
         )
+
+
+def cloth_snapshot_is_complete(snapshot_path: Path) -> bool:
+    """Return whether a cloth snapshot contains the files needed to load locally."""
+
+    try:
+        validate_cloth_snapshot(snapshot_path)
+    except RuntimeError:
+        return False
+    return True
 
 
 def validate_tryon_assets(fashn_repo_dir: Path, fashn_weights_dir: Path) -> None:
@@ -268,6 +282,19 @@ def download_cloth_model(
             ignore_patterns=None if full_download else CLOTH_IGNORE_PATTERNS,
             max_workers=max_workers,
         )
+        resolved = Path(snapshot_path)
+        if not cloth_snapshot_is_complete(resolved) and not full_download:
+            logger.warning(
+                "Cloth snapshot is still incomplete after the minimal download pass; retrying with full download patterns."
+            )
+            snapshot_path = snapshot_download(
+                repo_id=model_id,
+                cache_dir=str(cache_dir),
+                token=hf_token,
+                allow_patterns=None,
+                ignore_patterns=None,
+                max_workers=max_workers,
+            )
     except GatedRepoError as error:
         raise RuntimeError(
             "Access denied to gated Hugging Face model. Accept model terms and set HF_TOKEN.\n"
@@ -328,15 +355,29 @@ def download_fashn_weights(weights_dir: Path, hf_token: str | bool) -> None:
     dwpose_dir = weights_dir / "dwpose"
     dwpose_dir.mkdir(parents=True, exist_ok=True)
 
+    required_files = [
+        weights_dir / "model.safetensors",
+        dwpose_dir / "yolox_l.onnx",
+        dwpose_dir / "dw-ll_ucoco_384.onnx",
+    ]
+    missing_files = [path for path in required_files if not path.exists()]
+    if not missing_files:
+        logger.info("FASHN weights already present: %s", weights_dir)
+        return
+
     logger.info("Downloading FASHN TryOn model weights to %s", weights_dir)
-    hf_hub_download(
-        repo_id="fashn-ai/fashn-vton-1.5",
-        filename="model.safetensors",
-        local_dir=str(weights_dir),
-        token=hf_token,
-    )
+    if weights_dir / "model.safetensors" in missing_files:
+        hf_hub_download(
+            repo_id="fashn-ai/fashn-vton-1.5",
+            filename="model.safetensors",
+            local_dir=str(weights_dir),
+            token=hf_token,
+        )
 
     for filename in ["yolox_l.onnx", "dw-ll_ucoco_384.onnx"]:
+        target_path = dwpose_dir / filename
+        if target_path not in missing_files:
+            continue
         logger.info("Downloading DWPose file: %s", filename)
         hf_hub_download(
             repo_id="fashn-ai/DWPose",

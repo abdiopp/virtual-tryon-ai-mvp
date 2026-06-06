@@ -23,6 +23,17 @@ DEFAULT_NEGATIVE_PROMPT = (
     "watermark, text, logo artifacts, human body, mannequin, duplicate sleeves, broken zipper"
 )
 
+_CLOTH_REQUIRED_SNAPSHOT_FILES = (
+    "model_index.json",
+    "scheduler",
+    "tokenizer",
+    "unet/config.json",
+)
+_CLOTH_WEIGHT_CANDIDATES = (
+    "unet/diffusion_pytorch_model.fp16.safetensors",
+    "unet/diffusion_pytorch_model.safetensors",
+)
+
 
 class ClothGenerationError(RuntimeError):
     """Raised when cloth generation cannot proceed."""
@@ -53,10 +64,58 @@ class ClothGeneratorService:
         """Check whether cloth generation model exists locally."""
 
         model_path = Path(self.settings.cloth_model_id)
-        if model_path.exists() and (model_path / "model_index.json").exists():
-            return True
+        if model_path.exists():
+            try:
+                self._validate_cloth_snapshot(model_path)
+                return True
+            except ClothGenerationError:
+                return False
 
         try:
+            snapshot_path = Path(
+                snapshot_download(
+                    repo_id=self.settings.cloth_model_id,
+                    cache_dir=str(self.settings.model_cache_dir),
+                    allow_patterns=["model_index.json"],
+                    local_files_only=True,
+                    token=self.settings.hf_token,
+                )
+            )
+            self._validate_cloth_snapshot(snapshot_path)
+            return True
+        except Exception:
+            return False
+
+    def _validate_cloth_snapshot(self, snapshot_path: Path) -> None:
+        """Ensure the local cloth snapshot contains the files diffusers needs."""
+
+        missing = [
+            snapshot_path / relative
+            for relative in _CLOTH_REQUIRED_SNAPSHOT_FILES
+            if not (snapshot_path / relative).exists()
+        ]
+        if not any((snapshot_path / candidate).exists() for candidate in _CLOTH_WEIGHT_CANDIDATES):
+            missing.extend(snapshot_path / relative for relative in _CLOTH_WEIGHT_CANDIDATES)
+
+        if missing:
+            joined = "\n".join(f"- {path}" for path in missing)
+            raise ClothGenerationError(
+                "Cloth model cache is incomplete. Missing required files:\n"
+                f"{joined}\n"
+                "Run `python scripts/download_models.py --only-clothes` to repair the cache."
+            )
+
+    def _validate_local_model_source(self, model_path: Path) -> None:
+        """Validate a directly configured local cloth model path."""
+
+        if not model_path.exists():
+            raise ClothGenerationError(f"Configured CLOTH_MODEL_ID path does not exist: {model_path}")
+        self._validate_cloth_snapshot(model_path)
+
+    def _resolve_cached_snapshot(self) -> Path:
+        """Resolve the local cloth snapshot path and validate it."""
+
+        snapshot_path = Path(
             snapshot_download(
                 repo_id=self.settings.cloth_model_id,
                 cache_dir=str(self.settings.model_cache_dir),
@@ -64,9 +123,9 @@ class ClothGeneratorService:
                 local_files_only=True,
                 token=self.settings.hf_token,
             )
-            return True
-        except Exception:
-            return False
+        )
+        self._validate_cloth_snapshot(snapshot_path)
+        return snapshot_path
 
     def _enhance_prompt(self, prompt: str, category: str | None = None) -> str:
         """Optionally transform user prompt into product-style garment prompt."""
@@ -83,19 +142,13 @@ class ClothGeneratorService:
         """Resolve local model source path when local-only mode is enabled."""
 
         model_path = Path(self.settings.cloth_model_id)
-        if model_path.exists() and (model_path / "model_index.json").exists():
+        if model_path.exists():
+            self._validate_local_model_source(model_path)
             return str(model_path)
 
         if self.settings.cloth_local_files_only:
             try:
-                local_snapshot = snapshot_download(
-                    repo_id=self.settings.cloth_model_id,
-                    cache_dir=str(self.settings.model_cache_dir),
-                    allow_patterns=["model_index.json"],
-                    local_files_only=True,
-                    token=self.settings.hf_token,
-                )
-                return local_snapshot
+                return str(self._resolve_cached_snapshot())
             except Exception as error:
                 raise ClothGenerationError(
                     "CLOTH_LOCAL_FILES_ONLY is enabled but model is not fully cached. "
