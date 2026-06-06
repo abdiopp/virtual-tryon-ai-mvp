@@ -20,6 +20,10 @@ This setup is designed for local Intel integrated graphics and Apple Silicon dev
 - `app/services/tryon_service.py`: FASHN VTON try-on backend wrapper
 - `scripts/download_models.py`: downloads cloth model + FASHN repo/weights
 
+## Frontend
+
+A new Next.js App Router frontend lives in [`frontend/`](frontend/README.md). It preserves the existing backend contract, adds a premium dashboard UI, and safely previews generated local files through the browser.
+
 ## Requirements
 
 - Python 3.10+
