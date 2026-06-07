@@ -59,6 +59,21 @@ export const virtualTryOnResponseSchema = z.object({
   metadata: z.record(z.unknown())
 });
 
+export const virtualTryOnJobCreateResponseSchema = z.object({
+  success: z.boolean(),
+  job_id: z.string(),
+  status: z.string()
+});
+
+export const virtualTryOnJobStatusResponseSchema = z.object({
+  success: z.boolean(),
+  job_id: z.string(),
+  status: z.string(),
+  result_path: z.string().nullable().optional(),
+  metadata: z.record(z.unknown()),
+  error: z.string().nullable().optional()
+});
+
 export const tryOnCategoryOptions = garmentCategories;
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
@@ -67,3 +82,5 @@ export type GenerateClothItem = z.infer<typeof generateClothItemSchema>;
 export type GenerateClothesResponse = z.infer<typeof generateClothesResponseSchema>;
 export type VirtualTryOnPathRequest = z.infer<typeof virtualTryOnPathRequestSchema>;
 export type VirtualTryOnResponse = z.infer<typeof virtualTryOnResponseSchema>;
+export type VirtualTryOnJobCreateResponse = z.infer<typeof virtualTryOnJobCreateResponseSchema>;
+export type VirtualTryOnJobStatusResponse = z.infer<typeof virtualTryOnJobStatusResponseSchema>;

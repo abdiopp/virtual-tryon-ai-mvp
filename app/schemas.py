@@ -67,3 +67,22 @@ class VirtualTryOnResponse(BaseModel):
     success: bool
     result_path: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class VirtualTryOnJobCreateResponse(BaseModel):
+    """Response payload for async try-on job creation."""
+
+    success: bool
+    job_id: str
+    status: str
+
+
+class VirtualTryOnJobStatusResponse(BaseModel):
+    """Response payload for async try-on job status polling."""
+
+    success: bool
+    job_id: str
+    status: str
+    result_path: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None

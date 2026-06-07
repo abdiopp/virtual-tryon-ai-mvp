@@ -9,6 +9,7 @@ from app.routes.files import router as files_router
 from app.routes.generate_clothes import router as generate_clothes_router
 from app.routes.health import router as health_router
 from app.routes.virtual_tryon import router as virtual_tryon_router
+from app.routes.virtual_tryon_jobs import router as virtual_tryon_jobs_router
 from app.utils.logging_utils import configure_logging, get_logger
 
 configure_logging()
@@ -26,6 +27,7 @@ app.include_router(health_router)
 app.include_router(files_router)
 app.include_router(generate_clothes_router)
 app.include_router(virtual_tryon_router)
+app.include_router(virtual_tryon_jobs_router)
 
 
 @app.on_event("startup")

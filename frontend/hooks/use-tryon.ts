@@ -2,16 +2,41 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { VirtualTryOnResponse } from "@/lib/schemas";
 
-import { virtualTryOnFromPath, virtualTryOnFromUpload } from "@/lib/api/endpoints";
+import { createVirtualTryOnPathJob, createVirtualTryOnUploadJob, getVirtualTryOnJob } from "@/lib/api/endpoints";
 import type { VirtualTryOnPathRequest } from "@/lib/schemas";
 import { appendHistoryEntry } from "@/lib/local-history";
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForTryOnResult(jobId: string): Promise<VirtualTryOnResponse> {
+  for (;;) {
+    const job = await getVirtualTryOnJob(jobId);
+    if (job.status === "completed" && job.result_path) {
+      return {
+        success: true,
+        result_path: job.result_path,
+        metadata: job.metadata
+      };
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error || "Try-on failed.");
+    }
+    await sleep(3000);
+  }
+}
 
 export function useTryOnUploadMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (payload: FormData) => virtualTryOnFromUpload(payload),
+    mutationFn: async (payload: FormData) => {
+      const job = await createVirtualTryOnUploadJob(payload);
+      return waitForTryOnResult(job.job_id);
+    },
     onSuccess: (data) => {
       toast.success("Virtual try-on completed.");
       appendHistoryEntry({
@@ -34,7 +59,10 @@ export function useTryOnPathMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (payload: VirtualTryOnPathRequest) => virtualTryOnFromPath(payload),
+    mutationFn: async (payload: VirtualTryOnPathRequest) => {
+      const job = await createVirtualTryOnPathJob(payload);
+      return waitForTryOnResult(job.job_id);
+    },
     onSuccess: (data) => {
       toast.success("Virtual try-on completed.");
       appendHistoryEntry({

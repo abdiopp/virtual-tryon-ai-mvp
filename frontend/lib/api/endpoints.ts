@@ -3,11 +3,15 @@ import {
   generateClothesRequestSchema,
   generateClothesResponseSchema,
   healthResponseSchema,
+  virtualTryOnJobCreateResponseSchema,
+  virtualTryOnJobStatusResponseSchema,
   virtualTryOnPathRequestSchema,
   virtualTryOnResponseSchema,
   type GenerateClothesRequest,
   type GenerateClothesResponse,
   type HealthResponse,
+  type VirtualTryOnJobCreateResponse,
+  type VirtualTryOnJobStatusResponse,
   type VirtualTryOnPathRequest,
   type VirtualTryOnResponse
 } from "@/lib/schemas";
@@ -32,4 +36,20 @@ export async function virtualTryOnFromPath(input: VirtualTryOnPathRequest): Prom
   const payload = virtualTryOnPathRequestSchema.parse(input);
   const data = await apiClient.post("/virtual-tryon-from-path", payload);
   return virtualTryOnResponseSchema.parse(data);
+}
+
+export async function createVirtualTryOnUploadJob(formData: FormData): Promise<VirtualTryOnJobCreateResponse> {
+  const data = await apiClient.post("/virtual-tryon-jobs/upload", formData);
+  return virtualTryOnJobCreateResponseSchema.parse(data);
+}
+
+export async function createVirtualTryOnPathJob(input: VirtualTryOnPathRequest): Promise<VirtualTryOnJobCreateResponse> {
+  const payload = virtualTryOnPathRequestSchema.parse(input);
+  const data = await apiClient.post("/virtual-tryon-jobs/from-path", payload);
+  return virtualTryOnJobCreateResponseSchema.parse(data);
+}
+
+export async function getVirtualTryOnJob(jobId: string): Promise<VirtualTryOnJobStatusResponse> {
+  const data = await apiClient.get(`/virtual-tryon-jobs/${jobId}`);
+  return virtualTryOnJobStatusResponseSchema.parse(data);
 }
