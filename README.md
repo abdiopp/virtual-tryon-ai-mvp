@@ -24,6 +24,10 @@ This setup is designed for local Intel integrated graphics and Apple Silicon dev
 
 A new Next.js App Router frontend lives in [`frontend/`](frontend/README.md). It preserves the existing backend contract, adds a premium dashboard UI, and safely previews generated local files through the browser.
 
+## Colab Demo
+
+If you want to run the backend in Google Colab for a demo, use [COLAB_DEMO_SETUP.md](COLAB_DEMO_SETUP.md).
+
 ## Requirements
 
 - Python 3.10+

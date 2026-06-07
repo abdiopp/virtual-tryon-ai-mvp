@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config import get_settings
+from app.routes.files import router as files_router
 from app.routes.generate_clothes import router as generate_clothes_router
 from app.routes.health import router as health_router
 from app.routes.virtual_tryon import router as virtual_tryon_router
@@ -22,6 +23,7 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(files_router)
 app.include_router(generate_clothes_router)
 app.include_router(virtual_tryon_router)
 
