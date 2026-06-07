@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     fashn_num_samples: int = Field(default=1, alias="FASHN_NUM_SAMPLES")
     fashn_segmentation_free: bool = Field(default=True, alias="FASHN_SEGMENTATION_FREE")
     fashn_garment_photo_type: str = Field(default="flat-lay", alias="FASHN_GARMENT_PHOTO_TYPE")
+    fashn_fallback_to_cpu_on_oom: bool = Field(default=True, alias="FASHN_FALLBACK_TO_CPU_ON_OOM")
 
     model_cache_dir: Path = Field(default=Path("models/huggingface"), alias="MODEL_CACHE_DIR")
     output_dir: Path = Field(default=Path("outputs"), alias="OUTPUT_DIR")

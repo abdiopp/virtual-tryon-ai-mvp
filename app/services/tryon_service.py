@@ -152,6 +152,122 @@ class FashnTryOnService:
             eta_text,
         )
 
+    def _build_inference_command(
+        self,
+        *,
+        repo_dir: Path,
+        temp_dir: Path,
+        person_path: Path,
+        garment_path: Path,
+        normalized_category: str,
+        device: str,
+        num_timesteps: int,
+    ) -> list[str]:
+        """Build the FASHN inference command with the requested runtime settings."""
+
+        command = [
+            sys.executable,
+            "-u",
+            str(repo_dir / "examples" / "basic_inference.py"),
+            "--weights-dir",
+            str(self.settings.fashn_weights_dir.resolve()),
+            "--person-image",
+            str(person_path.resolve()),
+            "--garment-image",
+            str(garment_path.resolve()),
+            "--category",
+            normalized_category,
+            "--garment-photo-type",
+            self.settings.fashn_garment_photo_type,
+            "--output-dir",
+            str(temp_dir),
+            "--num-samples",
+            str(self.settings.fashn_num_samples),
+            "--num-timesteps",
+            str(num_timesteps),
+            "--guidance-scale",
+            str(self.settings.fashn_guidance_scale),
+            "--seed",
+            "42",
+            "--device",
+            device,
+        ]
+
+        if not self.settings.fashn_segmentation_free:
+            command.append("--no-segmentation-free")
+
+        return command
+
+    def _build_tryon_env(self, repo_dir: Path) -> dict[str, str]:
+        """Prepare the subprocess environment for FASHN inference."""
+
+        env = dict(os.environ)
+        src_path = str((repo_dir / "src").resolve())
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{src_path}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else src_path
+        )
+        return env
+
+    def _contains_cuda_oom(self, lines: list[str]) -> bool:
+        """Detect CUDA OOM messages from the captured subprocess output."""
+
+        joined = "\n".join(lines).lower()
+        return "cuda out of memory" in joined or "torch.outofmemoryerror" in joined
+
+    def _run_tryon_attempt(
+        self,
+        *,
+        repo_dir: Path,
+        person_path: Path,
+        garment_path: Path,
+        normalized_category: str,
+        device: str,
+        num_timesteps: int,
+        request_label: str,
+    ) -> Path:
+        """Run a single try-on attempt and return the predicted output image path."""
+
+        with TemporaryDirectory(prefix="fashn_vton_output_") as temp_dir_str:
+            temp_dir = Path(temp_dir_str)
+            command = self._build_inference_command(
+                repo_dir=repo_dir,
+                temp_dir=temp_dir,
+                person_path=person_path,
+                garment_path=garment_path,
+                normalized_category=normalized_category,
+                device=device,
+                num_timesteps=num_timesteps,
+            )
+
+            env = self._build_tryon_env(repo_dir)
+
+            if device == "cuda":
+                env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+            self.logger.info("Running FASHN VTON command: %s", " ".join(command))
+            self.logger.info(
+                "%s runtime device=%s",
+                request_label,
+                device,
+            )
+            self._run_subprocess_with_live_logs(
+                command=command,
+                cwd=repo_dir,
+                env=env,
+            )
+
+            candidates = sorted(temp_dir.glob("output_*.png"))
+            if not candidates:
+                raise TryOnSetupError(
+                    "FASHN VTON finished without output image. "
+                    f"Checked: {temp_dir}"
+                )
+
+            return candidates[0]
+
     def _run_subprocess_with_live_logs(
         self,
         command: list[str],
@@ -266,80 +382,54 @@ class FashnTryOnService:
         )
 
         repo_dir = self.settings.fashn_model_dir
-        inference_script = repo_dir / "examples" / "basic_inference.py"
+        self.logger.info(
+            "Try-on request: category=%s person=%s garment=%s",
+            normalized_category,
+            person_path,
+            garment_path,
+        )
 
-        with TemporaryDirectory(prefix="fashn_vton_output_") as temp_dir_str:
-            temp_dir = Path(temp_dir_str)
-            command = [
-                sys.executable,
-                "-u",
-                str(inference_script),
-                "--weights-dir",
-                str(self.settings.fashn_weights_dir.resolve()),
-                "--person-image",
-                str(person_path.resolve()),
-                "--garment-image",
-                str(garment_path.resolve()),
-                "--category",
-                normalized_category,
-                "--garment-photo-type",
-                self.settings.fashn_garment_photo_type,
-                "--output-dir",
-                str(temp_dir),
-                "--num-samples",
-                str(self.settings.fashn_num_samples),
-                "--num-timesteps",
-                str(self.settings.fashn_num_timesteps),
-                "--guidance-scale",
-                str(self.settings.fashn_guidance_scale),
-                "--seed",
-                "42",
-                "--device",
-                "cuda" if self.runtime_device == "cuda" else "cpu",
-            ]
+        initial_device = "cuda" if self.runtime_device == "cuda" else "cpu"
+        initial_timesteps = self.settings.fashn_num_timesteps
 
-            if not self.settings.fashn_segmentation_free:
-                command.append("--no-segmentation-free")
+        try:
+            predicted_path = self._run_tryon_attempt(
+                repo_dir=repo_dir,
+                person_path=person_path,
+                garment_path=garment_path,
+                normalized_category=normalized_category,
+                device=initial_device,
+                num_timesteps=initial_timesteps,
+                request_label="Try-on",
+            )
+        except TryOnSetupError as error:
+            should_fallback = (
+                initial_device == "cuda"
+                and self.settings.fashn_fallback_to_cpu_on_oom
+                and self._contains_cuda_oom(str(error).splitlines())
+            )
+            if not should_fallback:
+                raise
 
-            env = dict(**os.environ)
-            src_path = str((repo_dir / "src").resolve())
-            existing_pythonpath = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = (
-                f"{src_path}{os.pathsep}{existing_pythonpath}"
-                if existing_pythonpath
-                else src_path
+            fallback_timesteps = min(4, initial_timesteps)
+            self.logger.warning(
+                "CUDA OOM detected for try-on; retrying on CPU with %d timestep(s).",
+                fallback_timesteps,
+            )
+            predicted_path = self._run_tryon_attempt(
+                repo_dir=repo_dir,
+                person_path=person_path,
+                garment_path=garment_path,
+                normalized_category=normalized_category,
+                device="cpu",
+                num_timesteps=fallback_timesteps,
+                request_label="Try-on fallback",
             )
 
-            self.logger.info("Running FASHN VTON command: %s", " ".join(command))
-            self.logger.info(
-                "Try-on runtime device=%s (intel iGPU and Mac fallback run on CPU mode)",
-                self.runtime_device,
-            )
-            self.logger.info(
-                "Try-on request: category=%s person=%s garment=%s",
-                normalized_category,
-                person_path,
-                garment_path,
-            )
-
-            self._run_subprocess_with_live_logs(
-                command=command,
-                cwd=repo_dir,
-                env=env,
-            )
-
-            candidates = sorted(temp_dir.glob("output_*.png"))
-            if not candidates:
-                raise TryOnSetupError(
-                    "FASHN VTON finished without output image. "
-                    f"Checked: {temp_dir}"
-                )
-
-            predicted_path = candidates[0]
-            target_output_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(predicted_path, target_output_path)
-            elapsed_seconds = time.monotonic() - request_started_at
-            self.logger.info("Try-on output saved to %s in %.1fs", target_output_path, elapsed_seconds)
+        target_output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(predicted_path, target_output_path)
+        elapsed_seconds = time.monotonic() - request_started_at
+        self.logger.info("Try-on output saved to %s in %.1fs", target_output_path, elapsed_seconds)
 
         return VirtualTryOnResult(
             result_path=str(target_output_path),
