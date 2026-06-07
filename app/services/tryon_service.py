@@ -227,8 +227,9 @@ class FashnTryOnService:
         device: str,
         num_timesteps: int,
         request_label: str,
+        target_output_path: Path,
     ) -> Path:
-        """Run a single try-on attempt and return the predicted output image path."""
+        """Run a single try-on attempt and copy the result before cleanup."""
 
         with TemporaryDirectory(prefix="fashn_vton_output_") as temp_dir_str:
             temp_dir = Path(temp_dir_str)
@@ -266,7 +267,10 @@ class FashnTryOnService:
                     f"Checked: {temp_dir}"
                 )
 
-            return candidates[0]
+            predicted_path = candidates[0]
+            target_output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(predicted_path, target_output_path)
+            return target_output_path
 
     def _run_subprocess_with_live_logs(
         self,
@@ -401,6 +405,7 @@ class FashnTryOnService:
                 device=initial_device,
                 num_timesteps=initial_timesteps,
                 request_label="Try-on",
+                target_output_path=target_output_path,
             )
         except TryOnSetupError as error:
             should_fallback = (
@@ -424,15 +429,14 @@ class FashnTryOnService:
                 device="cpu",
                 num_timesteps=fallback_timesteps,
                 request_label="Try-on fallback",
+                target_output_path=target_output_path,
             )
 
-        target_output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(predicted_path, target_output_path)
         elapsed_seconds = time.monotonic() - request_started_at
-        self.logger.info("Try-on output saved to %s in %.1fs", target_output_path, elapsed_seconds)
+        self.logger.info("Try-on output saved to %s in %.1fs", predicted_path, elapsed_seconds)
 
         return VirtualTryOnResult(
-            result_path=str(target_output_path),
+            result_path=str(predicted_path),
             metadata={
                 "category": normalized_category,
                 "source_person": str(person_path),
