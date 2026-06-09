@@ -260,7 +260,12 @@ class ClothGeneratorService:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        if (
+            hasattr(torch, "mps")
+            and hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+            and hasattr(torch.mps, "empty_cache")
+        ):
             torch.mps.empty_cache()
 
     def _fit_to_non_cuda_pixel_budget(self, width: int, height: int) -> tuple[int, int]:
