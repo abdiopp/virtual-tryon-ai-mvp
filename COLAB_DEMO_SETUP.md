@@ -38,8 +38,9 @@ Suggested Colab GPU settings:
 - `width=768`
 - `height=1024`
 - `num_inference_steps=30`
-- `FASHN_NUM_TIMESTEPS=30`
-- `FASHN_GUIDANCE_SCALE=1.5`
+- `LEFFA_NUM_INFERENCE_STEPS=30`
+- `LEFFA_GUIDANCE_SCALE=2.5`
+- `LEFFA_MODEL_TYPE=auto`
 
 ## Colab Notebook Cells
 
@@ -66,9 +67,11 @@ If Colab asks for more packages during the try-on stage, install them there rath
 %env DEVICE=auto
 %env NON_CUDA_FORCE_FAST_LIMITS=true
 %env CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0
-%env TRYON_BACKEND=fashn_vton
-%env FASHN_NUM_TIMESTEPS=30
-%env FASHN_GUIDANCE_SCALE=1.5
+%env TRYON_BACKEND=leffa
+%env LEFFA_NUM_INFERENCE_STEPS=30
+%env LEFFA_GUIDANCE_SCALE=2.5
+%env LEFFA_MODEL_TYPE=auto
+%env LEFFA_REPAINT=false
 %env CLOTH_UNLOAD_AFTER_REQUEST=true
 %env MODEL_CACHE_DIR=models/huggingface
 %env OUTPUT_DIR=outputs
@@ -204,7 +207,7 @@ For this project:
 
 - Keep `count=1`
 - Keep cloth generation near `768x1024` with 30 steps on Colab GPU
-- Keep FASHN try-on at 30 steps for balanced quality, or 50 steps if you have enough time and VRAM
+- Keep Leffa try-on at 30 steps for balanced quality, or 50 steps if you have enough time and VRAM
 - Prefer one request at a time
 
 For CPU fallback, use `DEVICE=cpu`, `width=512`, `height=768`, and `num_inference_steps=14`.

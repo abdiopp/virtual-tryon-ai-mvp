@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import get_settings
+from app.services.tryon_service import normalize_tryon_backend
 from app.utils.logging_utils import configure_logging, get_logger
 
 configure_logging()
@@ -58,6 +59,29 @@ CLOTH_IGNORE_PATTERNS = [
     "*/diffusion_flax_model.msgpack",
 ]
 
+LEFFA_ALLOW_PATTERNS = [
+    "densepose/*",
+    "humanparsing/*",
+    "openpose/*",
+    "schp/*",
+    "stable-diffusion-inpainting/*",
+    "stable-diffusion-inpainting/**",
+    "stable-diffusion-inpainting/**/*",
+    "virtual_tryon.pth",
+    "virtual_tryon_dc.pth",
+]
+
+LEFFA_REQUIRED_FILES = [
+    "virtual_tryon.pth",
+    "virtual_tryon_dc.pth",
+    "stable-diffusion-inpainting/model_index.json",
+    "densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
+    "densepose/model_final_162be9.pkl",
+    "humanparsing/parsing_atr.onnx",
+    "humanparsing/parsing_lip.onnx",
+    "openpose/body_pose_model.pth",
+]
+
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
@@ -81,12 +105,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--only-tryon",
         action="store_true",
-        help="Download try-on (FASHN VTON) repo + weights only.",
+        help="Download configured try-on backend repo + weights only.",
+    )
+    parser.add_argument(
+        "--tryon-backend",
+        choices=["leffa", "fashn_vton"],
+        default=None,
+        help="Override TRYON_BACKEND for try-on asset download.",
     )
     parser.add_argument(
         "--skip-parser-warmup",
         action="store_true",
-        help="Skip optional warmup download of FASHN human parser cache.",
+        help="Skip optional warmup download of the legacy FASHN human parser cache.",
     )
     parser.add_argument(
         "--max-workers",
@@ -220,6 +250,29 @@ def validate_tryon_assets(fashn_repo_dir: Path, fashn_weights_dir: Path) -> None
         )
 
 
+def validate_leffa_assets(leffa_repo_dir: Path, leffa_checkpoint_dir: Path) -> None:
+    """Validate that required Leffa repo files and checkpoints are present."""
+
+    required_repo_files = [
+        leffa_repo_dir / "leffa" / "model.py",
+        leffa_repo_dir / "leffa" / "inference.py",
+        leffa_repo_dir / "preprocess" / "humanparsing" / "run_parsing.py",
+        leffa_repo_dir / "preprocess" / "openpose" / "run_openpose.py",
+    ]
+    required_checkpoint_files = [
+        leffa_checkpoint_dir / relative for relative in LEFFA_REQUIRED_FILES
+    ]
+
+    missing = [path for path in [*required_repo_files, *required_checkpoint_files] if not path.exists()]
+    if missing:
+        joined = "\n".join(f"- {path}" for path in missing)
+        raise RuntimeError(
+            "Leffa assets validation failed; missing files:\n"
+            f"{joined}\n"
+            "Rerun `python scripts/download_models.py --only-tryon`."
+        )
+
+
 def normalize_hf_token(hf_token: str | None) -> str | None:
     """Normalize HF token by trimming whitespace and mapping blank values to None."""
 
@@ -348,6 +401,58 @@ def clone_repo(repo_url: str, destination: Path) -> None:
     subprocess.run(["git", "clone", repo_url, str(destination)], check=True, cwd=destination.parent)
 
 
+def download_leffa_checkpoints(
+    repo_id: str,
+    leffa_repo_dir: Path,
+    checkpoint_dir: Path,
+    hf_token: str | bool,
+    max_workers: int,
+    progress_interval: int,
+) -> None:
+    """Download required Leffa checkpoints and preprocessing model files."""
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    required_files = [checkpoint_dir / relative for relative in LEFFA_REQUIRED_FILES]
+    if all(path.exists() for path in required_files):
+        logger.info("Leffa checkpoints already present: %s", checkpoint_dir)
+        return
+
+    logger.info("Downloading Leffa checkpoints from %s to %s", repo_id, checkpoint_dir)
+    stop_event = threading.Event()
+    thread = start_progress_logger(
+        cache_dir=checkpoint_dir,
+        stop_event=stop_event,
+        interval_seconds=max(5, progress_interval),
+    )
+    try:
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(checkpoint_dir),
+            token=hf_token,
+            allow_patterns=LEFFA_ALLOW_PATTERNS,
+            max_workers=max_workers,
+        )
+    except GatedRepoError as error:
+        raise RuntimeError(
+            "Access denied to gated Hugging Face model. Accept model terms and set HF_TOKEN.\n"
+            f"Model: {repo_id}\nOriginal error: {error}"
+        ) from error
+    except RepositoryNotFoundError as error:
+        raise RuntimeError(f"Model repository not found: {repo_id}.") from error
+    except HfHubHTTPError as error:
+        status_code = getattr(error.response, "status_code", "unknown")
+        raise RuntimeError(
+            "Hugging Face HTTP error while downloading Leffa checkpoints.\n"
+            f"Model: {repo_id}\nHTTP status: {status_code}\nOriginal error: {error}"
+        ) from error
+    finally:
+        stop_event.set()
+        thread.join(timeout=1.0)
+
+    validate_leffa_assets(leffa_repo_dir, checkpoint_dir)
+    logger.info("Leffa checkpoints downloaded successfully.")
+
+
 def download_fashn_weights(weights_dir: Path, hf_token: str | bool) -> None:
     """Download required FASHN VTON try-on weights."""
 
@@ -419,12 +524,18 @@ def main() -> int:
         args.only_clothes = True
     configure_http_logs(show_httpx=args.show_httpx)
     settings = get_settings()
+    tryon_backend = (
+        "skipped"
+        if args.only_clothes
+        else normalize_tryon_backend(args.tryon_backend or settings.tryon_backend)
+    )
 
     logger.info(
-        "Download options: full_clothes=%s only_clothes=%s only_tryon=%s max_workers=%d interval=%ss",
+        "Download options: full_clothes=%s only_clothes=%s only_tryon=%s tryon_backend=%s max_workers=%d interval=%ss",
         args.full_clothes_download,
         args.only_clothes,
         args.only_tryon,
+        tryon_backend,
         args.max_workers,
         args.progress_interval,
     )
@@ -462,15 +573,34 @@ def main() -> int:
         )
 
     if run_tryon:
-        clone_repo(settings.fashn_repo_url, settings.fashn_model_dir)
-        download_fashn_weights(settings.fashn_weights_dir, hf_token=hub_token)
-        warmup_fashn_parser_cache(skip_warmup=args.skip_parser_warmup)
-        validate_tryon_assets(settings.fashn_model_dir, settings.fashn_weights_dir)
-        logger.info(
-            "Try-on assets validated: repo=%s weights=%s",
-            settings.fashn_model_dir,
-            settings.fashn_weights_dir,
-        )
+        if tryon_backend == "leffa":
+            clone_repo(settings.leffa_repo_url, settings.leffa_model_dir)
+            download_leffa_checkpoints(
+                repo_id=settings.leffa_hf_repo_id,
+                leffa_repo_dir=settings.leffa_model_dir,
+                checkpoint_dir=settings.leffa_checkpoint_dir,
+                hf_token=hub_token,
+                max_workers=args.max_workers,
+                progress_interval=args.progress_interval,
+            )
+            validate_leffa_assets(settings.leffa_model_dir, settings.leffa_checkpoint_dir)
+            logger.info(
+                "Leffa assets validated: repo=%s checkpoints=%s",
+                settings.leffa_model_dir,
+                settings.leffa_checkpoint_dir,
+            )
+        elif tryon_backend == "fashn_vton":
+            clone_repo(settings.fashn_repo_url, settings.fashn_model_dir)
+            download_fashn_weights(settings.fashn_weights_dir, hf_token=hub_token)
+            warmup_fashn_parser_cache(skip_warmup=args.skip_parser_warmup)
+            validate_tryon_assets(settings.fashn_model_dir, settings.fashn_weights_dir)
+            logger.info(
+                "FASHN assets validated: repo=%s weights=%s",
+                settings.fashn_model_dir,
+                settings.fashn_weights_dir,
+            )
+        else:
+            raise RuntimeError(f"Unsupported try-on backend: {tryon_backend}")
 
     print("\nSetup completed successfully. Next steps:")
     print("1. Install dependencies if needed:")

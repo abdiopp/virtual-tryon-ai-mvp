@@ -3,7 +3,7 @@
 A two-stage virtual try-on backend now tuned for Google Colab GPU demos, while still keeping CPU/MPS fallback behavior for local development:
 
 1. Cloth generation: `stabilityai/stable-diffusion-xl-base-1.0` through Diffusers
-2. Virtual try-on: `FASHN VTON v1.5` backend wrapper at balanced-quality settings
+2. Virtual try-on: `Leffa` backend wrapper at quality-focused Colab settings
 
 This setup is designed for Colab CUDA first. On local machines, `DEVICE=auto` falls back to Apple Silicon MPS or CPU when CUDA is not available.
 
@@ -17,8 +17,8 @@ This setup is designed for Colab CUDA first. On local machines, `DEVICE=auto` fa
 
 - `app/routes/*`: API endpoints
 - `app/services/cloth_generator.py`: Diffusers cloth generation service
-- `app/services/tryon_service.py`: FASHN VTON try-on backend wrapper
-- `scripts/download_models.py`: downloads cloth model + FASHN repo/weights
+- `app/services/tryon_service.py`: Leffa/FASHN try-on backend wrappers
+- `scripts/download_models.py`: downloads cloth model + configured try-on backend assets
 
 ## Frontend
 
@@ -63,7 +63,13 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process RemoteS
 Main keys from `.env.example`:
 
 - `CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0`
-- `TRYON_BACKEND=fashn_vton`
+- `TRYON_BACKEND=leffa`
+- `LEFFA_MODEL_DIR=models/leffa`
+- `LEFFA_CHECKPOINT_DIR=models/leffa_ckpts`
+- `LEFFA_NUM_INFERENCE_STEPS=30`
+- `LEFFA_GUIDANCE_SCALE=2.5`
+- `LEFFA_MODEL_TYPE=auto`
+- `LEFFA_REPAINT=false`
 - `FASHN_MODEL_DIR=models/fashn_vton`
 - `FASHN_WEIGHTS_DIR=models/fashn_weights`
 - `FASHN_NUM_TIMESTEPS=30`
@@ -98,6 +104,12 @@ Download only try-on assets:
 
 ```bash
 python scripts/download_models.py --only-tryon
+```
+
+Download the legacy FASHN backend instead:
+
+```bash
+python scripts/download_models.py --only-tryon --tryon-backend fashn_vton
 ```
 
 ## Run API
@@ -193,7 +205,8 @@ python scripts/virtual_tryon_cli.py \
 
 ## Performance Guidance
 
-- Colab GPU: keep `DEVICE=auto`, `count=1`, `768x1024`, and `num_inference_steps=30` for quality.
+- Colab GPU: keep `DEVICE=auto`, `count=1`, `768x1024`, and 30 inference steps for quality.
+- Leffa try-on is GPU-first; use Colab CUDA for practical inference speed.
 - Intel integrated graphics: set `DEVICE=cpu`.
 - Apple Silicon: set `DEVICE=mps`.
 - Local non-CUDA iteration: use smaller requests such as `512x768` and `num_inference_steps=14`.
@@ -201,5 +214,5 @@ python scripts/virtual_tryon_cli.py \
 
 ## Notes
 
-- This local MVP is optimized for non-CUDA environments.
+- This MVP is optimized for Colab CUDA, with bounded local fallbacks for development.
 - The API logs request start/end, progress, elapsed time, and ETA-style heartbeats for both cloth generation and virtual try-on so long-running calls are easier to monitor.

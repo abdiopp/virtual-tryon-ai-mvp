@@ -108,7 +108,7 @@ Response:
     "category": "tops",
     "source_person": "/abs/path/uploads/persons/person_abc.png",
     "source_garment": "/abs/path/uploads/garments/garment_xyz.png",
-    "tryon_backend": "fashn_vton",
+    "tryon_backend": "leffa",
     "runtime_device": "cpu",
     "generation_seconds": 12.345,
     "request_seconds": 12.345
@@ -165,8 +165,8 @@ Response is identical to the upload flow.
 
 ### Try-on
 
-- Categories are normalized to `tops`, `bottoms`, or `one-pieces`.
-- The FASHN repository and required weights must exist before inference can run.
+- Categories are normalized by the configured backend. Leffa returns `upper_body`, `lower_body`, or `dresses`; FASHN returns `tops`, `bottoms`, or `one-pieces`.
+- The configured try-on repository and required weights must exist before inference can run. The default backend is Leffa; FASHN remains available through `TRYON_BACKEND=fashn_vton`.
 - The backend streams progress logs while the subprocess runs, but it does not expose live progress in the HTTP response.
 
 ## Frontend Integration Notes

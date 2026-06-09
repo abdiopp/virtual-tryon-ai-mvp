@@ -41,7 +41,22 @@ class Settings(BaseSettings):
     )
     cloth_unload_after_request: bool = Field(default=True, alias="CLOTH_UNLOAD_AFTER_REQUEST")
 
-    tryon_backend: str = Field(default="fashn_vton", alias="TRYON_BACKEND")
+    tryon_backend: str = Field(default="leffa", alias="TRYON_BACKEND")
+    leffa_repo_url: str = Field(
+        default="https://github.com/franciszzj/Leffa.git",
+        alias="LEFFA_REPO_URL",
+    )
+    leffa_model_dir: Path = Field(default=Path("models/leffa"), alias="LEFFA_MODEL_DIR")
+    leffa_checkpoint_dir: Path = Field(default=Path("models/leffa_ckpts"), alias="LEFFA_CHECKPOINT_DIR")
+    leffa_hf_repo_id: str = Field(default="franciszzj/Leffa", alias="LEFFA_HF_REPO_ID")
+    leffa_num_inference_steps: int = Field(default=30, alias="LEFFA_NUM_INFERENCE_STEPS")
+    leffa_guidance_scale: float = Field(default=2.5, alias="LEFFA_GUIDANCE_SCALE")
+    leffa_seed: int = Field(default=42, alias="LEFFA_SEED")
+    leffa_model_type: str = Field(default="auto", alias="LEFFA_MODEL_TYPE")
+    leffa_ref_acceleration: bool = Field(default=False, alias="LEFFA_REF_ACCELERATION")
+    leffa_repaint: bool = Field(default=False, alias="LEFFA_REPAINT")
+    leffa_preprocess_garment: bool = Field(default=False, alias="LEFFA_PREPROCESS_GARMENT")
+
     fashn_repo_url: str = Field(
         default="https://github.com/fashn-AI/fashn-vton-1.5.git",
         alias="FASHN_REPO_URL",
@@ -105,6 +120,8 @@ class Settings(BaseSettings):
         self.model_cache_dir = self._resolve_project_path(self.model_cache_dir)
         self.output_dir = self._resolve_project_path(self.output_dir)
         self.upload_dir = self._resolve_project_path(self.upload_dir)
+        self.leffa_model_dir = self._resolve_project_path(self.leffa_model_dir)
+        self.leffa_checkpoint_dir = self._resolve_project_path(self.leffa_checkpoint_dir)
         self.fashn_model_dir = self._resolve_project_path(self.fashn_model_dir)
         self.fashn_weights_dir = self._resolve_project_path(self.fashn_weights_dir)
 
@@ -121,6 +138,8 @@ class Settings(BaseSettings):
             tryon_dir,
             persons_dir,
             garments_dir,
+            self.leffa_model_dir.parent,
+            self.leffa_checkpoint_dir,
             self.fashn_model_dir.parent,
             self.fashn_weights_dir,
         ]:

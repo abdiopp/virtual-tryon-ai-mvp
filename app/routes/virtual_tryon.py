@@ -7,13 +7,13 @@ import time
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.schemas import VirtualTryOnPathRequest, VirtualTryOnResponse
-from app.services.tryon_service import FashnTryOnService, TryOnSetupError
+from app.services.tryon_service import TryOnSetupError, get_tryon_service
 from app.services.storage_service import StorageService
 from app.utils.logging_utils import get_logger
 
 router = APIRouter(tags=["virtual-tryon"])
 storage = StorageService()
-tryon_service = FashnTryOnService()
+tryon_service = get_tryon_service()
 logger = get_logger(__name__)
 
 

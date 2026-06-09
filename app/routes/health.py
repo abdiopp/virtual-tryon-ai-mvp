@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from app.config import get_settings
 from app.schemas import HealthModelsStatus, HealthResponse
-from app.services.tryon_service import FashnTryOnService
+from app.services.tryon_service import get_tryon_service
 from app.services.cloth_generator import ClothGeneratorService
 from app.utils.device import describe_device
 
@@ -20,7 +20,7 @@ def health_check() -> HealthResponse:
 
     settings = get_settings()
     cloth_service = ClothGeneratorService(settings)
-    tryon_service = FashnTryOnService(settings)
+    tryon_service = get_tryon_service(settings)
 
     return HealthResponse(
         status="ok",

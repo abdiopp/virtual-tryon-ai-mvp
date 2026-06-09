@@ -17,11 +17,11 @@ from app.schemas import (
     VirtualTryOnPathRequest,
 )
 from app.services.storage_service import StorageService
-from app.services.tryon_service import FashnTryOnService, TryOnSetupError
+from app.services.tryon_service import TryOnSetupError, get_tryon_service
 
 router = APIRouter(tags=["virtual-tryon-jobs"])
 storage = StorageService()
-tryon_service = FashnTryOnService()
+tryon_service = get_tryon_service()
 executor = ThreadPoolExecutor(max_workers=1)
 job_lock = threading.Lock()
 

@@ -114,7 +114,7 @@ export function DashboardScreen() {
             label="Try-on model"
             value={health?.models.tryon_model ?? "missing"}
             tone={tryonAvailable ? "success" : "warning"}
-            hint="Reports whether the FASHN VTON assets are available locally."
+            hint="Reports whether the configured try-on backend assets are available locally."
           />
         </div>
       </div>

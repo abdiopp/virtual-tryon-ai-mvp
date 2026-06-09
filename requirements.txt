@@ -20,4 +20,13 @@ einops
 tqdm
 matplotlib
 fashn-human-parser
+fvcore
+omegaconf
+peft
+psutil
+pycocotools
+scikit-image
+scipy
+timm
+torchmetrics
 pytest
