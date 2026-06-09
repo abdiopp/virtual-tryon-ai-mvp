@@ -15,8 +15,10 @@ This frontend was designed against the existing Python backend in the repo root.
 | Method | Path | Purpose | Request | Response |
 | --- | --- | --- | --- | --- |
 | GET | `/` | API metadata | None | `{ name, status, docs }` |
-| GET | `/health` | Model and device status | None | `{ status, device, models: { cloth_generator, tryon_model } }` |
+| GET | `/health` | Model and device status | None | `{ status, device, requested_device, cuda_available, mps_available, models: { cloth_generator, tryon_model } }` |
 | POST | `/generate-clothes` | Generate garment images from text | JSON body | `{ success, items[] }` |
+| POST | `/generate-clothes-jobs` | Queue garment generation | JSON body | `{ success, job_id, status }` |
+| GET | `/generate-clothes-jobs/{job_id}` | Poll garment generation | None | `{ success, job_id, status, items[], metadata, error }` |
 | POST | `/virtual-tryon` | Run try-on with uploaded files | `multipart/form-data` | `{ success, result_path, metadata }` |
 | POST | `/virtual-tryon-from-path` | Run try-on using local file paths | JSON body | `{ success, result_path, metadata }` |
 
@@ -30,6 +32,9 @@ Response:
 {
   "status": "ok",
   "device": "cpu",
+  "requested_device": "auto",
+  "cuda_available": false,
+  "mps_available": false,
   "models": {
     "cloth_generator": "available",
     "tryon_model": "missing"
@@ -47,10 +52,10 @@ Request:
   "category": "hoodie",
   "negative_prompt": "low quality, blurry",
   "count": 1,
-  "width": 512,
-  "height": 768,
-  "guidance_scale": 0,
-  "num_inference_steps": 4,
+  "width": 768,
+  "height": 1024,
+  "guidance_scale": 7,
+  "num_inference_steps": 30,
   "seed": 123
 }
 ```
@@ -68,12 +73,12 @@ Response:
       "seed": 123,
       "metadata": {
         "category": "hoodie",
-        "width": 512,
-        "height": 768,
-        "guidance_scale": 0,
-        "num_inference_steps": 4,
+        "width": 768,
+        "height": 1024,
+        "guidance_scale": 7,
+        "num_inference_steps": 30,
         "device": "cpu",
-        "model_id": "stabilityai/sd-turbo",
+        "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
         "performance_notes": "none",
         "image_index": 1,
         "total_images": 1,
@@ -150,11 +155,12 @@ Response is identical to the upload flow.
 ### Cloth generation
 
 - Uses a Diffusers text-to-image pipeline.
-- Default model: `stabilityai/sd-turbo`.
+- Default model: `stabilityai/stable-diffusion-xl-base-1.0`.
 - `count` is clamped to `1..8`.
 - On non-CUDA devices, the backend may reduce count, steps, and resolution for performance.
 - If the model is SDXL-like, the backend enforces extra quality guardrails for width, height, steps, and guidance.
 - For turbo models, guidance is forced to `0.0`.
+- By default, the backend releases the cloth pipeline after generation so try-on has more GPU memory.
 - A prompt enhancement template can rewrite the user prompt into a product-photo prompt.
 
 ### Try-on
@@ -169,4 +175,3 @@ Response is identical to the upload flow.
 - The Next.js app previews local result files through `/api/files?path=...`.
 - Generated result cards show the returned `path` and metadata directly.
 - Because the backend does not provide file URLs, previews rely on workspace access from the frontend server.
-

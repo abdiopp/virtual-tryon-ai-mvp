@@ -15,15 +15,15 @@ from app.services.cloth_generator import ClothGenerationError, ClothGeneratorSer
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate garment images using SDXL.")
+    parser = argparse.ArgumentParser(description="Generate garment images using the configured Diffusers model.")
     parser.add_argument("--prompt", required=True, help="Garment generation prompt")
     parser.add_argument("--category", default=None, help="Optional garment category")
     parser.add_argument("--negative-prompt", default=None, help="Optional custom negative prompt")
     parser.add_argument("--count", type=int, default=1, help="Number of images to generate")
-    parser.add_argument("--width", type=int, default=512, help="Output width")
-    parser.add_argument("--height", type=int, default=768, help="Output height")
-    parser.add_argument("--guidance-scale", type=float, default=0.0, help="CFG guidance scale")
-    parser.add_argument("--num-inference-steps", type=int, default=4, help="Diffusion steps")
+    parser.add_argument("--width", type=int, default=768, help="Output width")
+    parser.add_argument("--height", type=int, default=1024, help="Output height")
+    parser.add_argument("--guidance-scale", type=float, default=7.0, help="CFG guidance scale")
+    parser.add_argument("--num-inference-steps", type=int, default=30, help="Diffusion steps")
     parser.add_argument("--seed", type=int, default=None, help="Optional base seed")
     return parser.parse_args()
 

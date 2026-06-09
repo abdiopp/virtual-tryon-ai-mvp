@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
 
     cloth_model_id: str = Field(
-        default="stabilityai/sd-turbo",
+        default="stabilityai/stable-diffusion-xl-base-1.0",
         validation_alias=AliasChoices("CLOTH_MODEL_ID", "SDXL_MODEL_ID"),
     )
     cloth_lora_path: str | None = Field(
@@ -35,6 +35,11 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("CLOTH_LOCAL_FILES_ONLY", "SDXL_LOCAL_FILES_ONLY"),
     )
+    cloth_enable_model_cpu_offload: bool = Field(
+        default=False,
+        alias="CLOTH_ENABLE_MODEL_CPU_OFFLOAD",
+    )
+    cloth_unload_after_request: bool = Field(default=True, alias="CLOTH_UNLOAD_AFTER_REQUEST")
 
     tryon_backend: str = Field(default="fashn_vton", alias="TRYON_BACKEND")
     fashn_repo_url: str = Field(
@@ -43,8 +48,8 @@ class Settings(BaseSettings):
     )
     fashn_model_dir: Path = Field(default=Path("models/fashn_vton"), alias="FASHN_MODEL_DIR")
     fashn_weights_dir: Path = Field(default=Path("models/fashn_weights"), alias="FASHN_WEIGHTS_DIR")
-    fashn_num_timesteps: int = Field(default=8, alias="FASHN_NUM_TIMESTEPS")
-    fashn_guidance_scale: float = Field(default=1.2, alias="FASHN_GUIDANCE_SCALE")
+    fashn_num_timesteps: int = Field(default=30, alias="FASHN_NUM_TIMESTEPS")
+    fashn_guidance_scale: float = Field(default=1.5, alias="FASHN_GUIDANCE_SCALE")
     fashn_num_samples: int = Field(default=1, alias="FASHN_NUM_SAMPLES")
     fashn_segmentation_free: bool = Field(default=True, alias="FASHN_SEGMENTATION_FREE")
     fashn_garment_photo_type: str = Field(default="flat-lay", alias="FASHN_GARMENT_PHOTO_TYPE")
@@ -54,11 +59,11 @@ class Settings(BaseSettings):
     output_dir: Path = Field(default=Path("outputs"), alias="OUTPUT_DIR")
     upload_dir: Path = Field(default=Path("uploads"), alias="UPLOAD_DIR")
 
-    device: str = Field(default="cpu", alias="DEVICE")
+    device: str = Field(default="auto", alias="DEVICE")
     mps_use_fp16: bool = Field(default=False, alias="MPS_USE_FP16")
 
-    default_image_width: int = Field(default=512, alias="DEFAULT_IMAGE_WIDTH")
-    default_image_height: int = Field(default=768, alias="DEFAULT_IMAGE_HEIGHT")
+    default_image_width: int = Field(default=768, alias="DEFAULT_IMAGE_WIDTH")
+    default_image_height: int = Field(default=1024, alias="DEFAULT_IMAGE_HEIGHT")
 
     non_cuda_force_fast_limits: bool = Field(default=True, alias="NON_CUDA_FORCE_FAST_LIMITS")
     non_cuda_max_count: int = Field(default=2, alias="NON_CUDA_MAX_COUNT")
@@ -68,9 +73,9 @@ class Settings(BaseSettings):
     prompt_enhancement_enabled: bool = Field(default=True, alias="PROMPT_ENHANCEMENT_ENABLED")
     prompt_enhancement_template: str = Field(
         default=(
-            "front view ecommerce product photo of a {prompt}, isolated garment, "
-            "clean white background, realistic cotton fabric texture, symmetrical design, "
-            "high detail, no person, no mannequin"
+            "front view high-end ecommerce product photo of a {prompt}, isolated {category}, "
+            "clean white background, realistic fabric texture, natural seams and stitching, "
+            "symmetrical silhouette, high detail, no person, no mannequin"
         ),
         alias="PROMPT_ENHANCEMENT_TEMPLATE",
     )

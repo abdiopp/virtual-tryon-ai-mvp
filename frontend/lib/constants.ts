@@ -10,10 +10,10 @@ export const defaultGenerationForm = {
   negative_prompt:
     "low quality, blurry, distorted, deformed clothing, watermark, text, logo artifacts",
   count: 1,
-  width: 512,
-  height: 768,
-  guidance_scale: 0,
-  num_inference_steps: 4,
+  width: 768,
+  height: 1024,
+  guidance_scale: 7,
+  num_inference_steps: 30,
   seed: undefined
 };
 

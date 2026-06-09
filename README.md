@@ -1,16 +1,16 @@
 # virtual-tryon-ai-mvp
 
-A local two-stage virtual try-on backend optimized for non-NVIDIA machines:
+A two-stage virtual try-on backend now tuned for Google Colab GPU demos, while still keeping CPU/MPS fallback behavior for local development:
 
-1. Cloth generation: `stabilityai/sd-turbo` (few-step fast diffusion)
-2. Virtual try-on: `FASHN VTON v1.5` backend wrapper (CPU/iGPU-friendly fallback)
+1. Cloth generation: `stabilityai/stable-diffusion-xl-base-1.0` through Diffusers
+2. Virtual try-on: `FASHN VTON v1.5` backend wrapper at balanced-quality settings
 
-This setup is designed for local Intel integrated graphics and Apple Silicon development.
+This setup is designed for Colab CUDA first. On local machines, `DEVICE=auto` falls back to Apple Silicon MPS or CPU when CUDA is not available.
 
 ## Why This Version
 
-- Removes hard CUDA dependency from core workflow.
-- Uses fast defaults so requests finish in practical time on CPU/MPS.
+- Uses better default models and settings now that the target runtime is Colab.
+- Keeps non-CUDA guardrails so local CPU/MPS requests are still bounded.
 - Keeps modular FastAPI architecture for future backend integration.
 
 ## Architecture
@@ -62,13 +62,18 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process RemoteS
 
 Main keys from `.env.example`:
 
-- `CLOTH_MODEL_ID=stabilityai/sd-turbo`
+- `CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0`
 - `TRYON_BACKEND=fashn_vton`
 - `FASHN_MODEL_DIR=models/fashn_vton`
 - `FASHN_WEIGHTS_DIR=models/fashn_weights`
-- `DEVICE=cpu` for Intel iGPU machines
-- `DEVICE=mps` for Apple Silicon
+- `FASHN_NUM_TIMESTEPS=30`
+- `FASHN_GUIDANCE_SCALE=1.5`
+- `DEVICE=auto` to use CUDA, then MPS, then CPU
+- `DEVICE=cpu` to force local CPU
+- `DEVICE=mps` to force Apple Silicon
 - `NON_CUDA_FORCE_FAST_LIMITS=true` to auto-cap heavy requests
+- `CLOTH_UNLOAD_AFTER_REQUEST=true` to free SDXL GPU memory before try-on
+- `CLOTH_ENABLE_MODEL_CPU_OFFLOAD=true` if Colab GPU VRAM is tight
 
 Backward compatibility aliases are supported:
 
@@ -133,12 +138,22 @@ curl -X POST http://localhost:8000/generate-clothes \
     "prompt": "oversized black hoodie with minimal logo",
     "category": "hoodie",
     "count": 1,
-    "width": 512,
-    "height": 768,
-    "guidance_scale": 0.0,
-    "num_inference_steps": 4,
+    "width": 768,
+    "height": 1024,
+    "guidance_scale": 7.0,
+    "num_inference_steps": 30,
     "seed": 123
   }'
+```
+
+For public tunnels or slow SDXL runs, prefer the async job endpoint so the proxy does not time out:
+
+```bash
+curl -X POST http://localhost:8000/generate-clothes-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"oversized black hoodie with minimal logo","category":"hoodie","count":1,"width":768,"height":1024,"guidance_scale":7.0,"num_inference_steps":30}'
+
+curl http://localhost:8000/generate-clothes-jobs/<job_id>
 ```
 
 ## Virtual Try-On
@@ -161,10 +176,10 @@ Generate clothes:
 python scripts/generate_clothes_cli.py \
   --prompt "black oversized hoodie streetwear" \
   --count 1 \
-  --width 512 \
-  --height 768 \
-  --num-inference-steps 4 \
-  --guidance-scale 0.0
+  --width 768 \
+  --height 1024 \
+  --num-inference-steps 30 \
+  --guidance-scale 7.0
 ```
 
 Try-on:
@@ -178,9 +193,10 @@ python scripts/virtual_tryon_cli.py \
 
 ## Performance Guidance
 
+- Colab GPU: keep `DEVICE=auto`, `count=1`, `768x1024`, and `num_inference_steps=30` for quality.
 - Intel integrated graphics: set `DEVICE=cpu`.
 - Apple Silicon: set `DEVICE=mps`.
-- Keep `count=1`, `num_inference_steps=2..6`, and `<=512x768` while iterating.
+- Local non-CUDA iteration: use smaller requests such as `512x768` and `num_inference_steps=14`.
 - Non-CUDA fast caps are auto-applied when `NON_CUDA_FORCE_FAST_LIMITS=true`.
 
 ## Notes

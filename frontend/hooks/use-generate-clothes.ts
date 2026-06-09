@@ -3,15 +3,38 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { generateClothes } from "@/lib/api/endpoints";
-import type { GenerateClothesRequest } from "@/lib/schemas";
+import { createGenerateClothesJob, getGenerateClothesJob } from "@/lib/api/endpoints";
+import type { GenerateClothesRequest, GenerateClothesResponse } from "@/lib/schemas";
 import { appendHistoryEntry } from "@/lib/local-history";
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForGenerateResult(jobId: string): Promise<GenerateClothesResponse> {
+  for (;;) {
+    const job = await getGenerateClothesJob(jobId);
+    if (job.status === "completed") {
+      return {
+        success: true,
+        items: job.items
+      };
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error || "Generation failed.");
+    }
+    await sleep(3000);
+  }
+}
 
 export function useGenerateClothesMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (payload: GenerateClothesRequest) => generateClothes(payload),
+    mutationFn: async (payload: GenerateClothesRequest) => {
+      const job = await createGenerateClothesJob(payload);
+      return waitForGenerateResult(job.job_id);
+    },
     onSuccess: (data, variables) => {
       toast.success(`Generated ${data.items.length} garment${data.items.length > 1 ? "s" : ""}.`);
       appendHistoryEntry({

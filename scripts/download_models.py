@@ -1,4 +1,4 @@
-"""Download and prepare lightweight cloth + try-on assets for local MVP usage."""
+"""Download and prepare cloth generation + try-on assets for Colab/local usage."""
 
 from __future__ import annotations
 
@@ -252,7 +252,7 @@ def download_cloth_model(
     max_workers: int,
     progress_interval: int,
 ) -> Path:
-    """Download lightweight cloth model to cache."""
+    """Download the configured cloth model to cache."""
 
     local_model_dir = Path(model_id)
     if local_model_dir.exists():

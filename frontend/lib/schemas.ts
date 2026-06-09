@@ -9,6 +9,9 @@ export const healthModelsStatusSchema = z.object({
 export const healthResponseSchema = z.object({
   status: z.string(),
   device: z.string(),
+  requested_device: z.string(),
+  cuda_available: z.boolean(),
+  mps_available: z.boolean(),
   models: healthModelsStatusSchema
 });
 
@@ -47,6 +50,21 @@ export const generateClothesResponseSchema = z.object({
   items: z.array(generateClothItemSchema)
 });
 
+export const generateClothesJobCreateResponseSchema = z.object({
+  success: z.boolean(),
+  job_id: z.string(),
+  status: z.string()
+});
+
+export const generateClothesJobStatusResponseSchema = z.object({
+  success: z.boolean(),
+  job_id: z.string(),
+  status: z.string(),
+  items: z.array(generateClothItemSchema),
+  metadata: z.record(z.unknown()),
+  error: z.string().nullable().optional()
+});
+
 export const virtualTryOnPathRequestSchema = z.object({
   person_image_path: z.string().min(1),
   garment_image_path: z.string().min(1),
@@ -80,6 +98,8 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type GenerateClothesRequest = z.infer<typeof generateClothesRequestSchema>;
 export type GenerateClothItem = z.infer<typeof generateClothItemSchema>;
 export type GenerateClothesResponse = z.infer<typeof generateClothesResponseSchema>;
+export type GenerateClothesJobCreateResponse = z.infer<typeof generateClothesJobCreateResponseSchema>;
+export type GenerateClothesJobStatusResponse = z.infer<typeof generateClothesJobStatusResponseSchema>;
 export type VirtualTryOnPathRequest = z.infer<typeof virtualTryOnPathRequestSchema>;
 export type VirtualTryOnResponse = z.infer<typeof virtualTryOnResponseSchema>;
 export type VirtualTryOnJobCreateResponse = z.infer<typeof virtualTryOnJobCreateResponseSchema>;

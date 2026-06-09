@@ -41,8 +41,8 @@ export function GenerateForm() {
   const helperNotes = useMemo(
     () => [
       "The backend caps count at 8.",
-      "Non-CUDA devices may auto-adjust size, steps, and count.",
-      "Turbo models ignore guidance scale and prefer 0.0."
+      "Colab GPU defaults use SDXL at 768x1024 with 30 steps.",
+      "Non-CUDA devices may auto-adjust size, steps, and count."
     ],
     []
   );

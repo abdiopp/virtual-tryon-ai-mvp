@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import math
 import random
 import time
@@ -221,20 +222,46 @@ class ClothGeneratorService:
                     f"Unable to load LoRA weights from {lora_path}: {error}"
                 ) from error
 
-        pipeline = pipeline.to(self.device)
+        placement = self.device
+        if self.device == "cuda" and self.settings.cloth_enable_model_cpu_offload:
+            try:
+                pipeline.enable_model_cpu_offload()
+            except Exception as error:
+                raise ClothGenerationError(
+                    "Unable to enable model CPU offload. Install `accelerate` or set "
+                    "CLOTH_ENABLE_MODEL_CPU_OFFLOAD=false."
+                ) from error
+            placement = "cuda+cpu-offload"
+        else:
+            pipeline = pipeline.to(self.device)
         pipeline.set_progress_bar_config(disable=True)
-        pipeline.enable_vae_slicing()
+        if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
+            pipeline.vae.enable_slicing()
+        else:
+            pipeline.enable_vae_slicing()
         if self.device != "cuda":
             pipeline.enable_attention_slicing()
 
-        self.pipeline = pipeline
+        if not self.settings.cloth_unload_after_request:
+            self.pipeline = pipeline
         self.logger.info(
-            "Cloth pipeline loaded on device=%s | dtype=%s | source=%s",
-            self.device,
+            "Cloth pipeline loaded on device=%s | dtype=%s | source=%s | cached=%s",
+            placement,
             dtype,
             model_source,
+            not self.settings.cloth_unload_after_request,
         )
-        return self.pipeline
+        return pipeline
+
+    def _clear_accelerator_cache(self) -> None:
+        """Release cached pipeline references and accelerator memory after large generations."""
+
+        self.pipeline = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
 
     def _fit_to_non_cuda_pixel_budget(self, width: int, height: int) -> tuple[int, int]:
         """Downscale dimensions to respect configured non-CUDA pixel budget."""
@@ -435,13 +462,13 @@ class ClothGeneratorService:
         category: str | None = None,
         negative_prompt: str | None = None,
         count: int = 1,
-        width: int = 512,
-        height: int = 768,
-        guidance_scale: float = 0.0,
-        num_inference_steps: int = 4,
+        width: int = 768,
+        height: int = 1024,
+        guidance_scale: float = 7.0,
+        num_inference_steps: int = 30,
         seed: int | None = None,
     ) -> list[ClothGenerationResultItem]:
-        """Generate standalone garment product images with fast defaults."""
+        """Generate standalone garment product images with Colab-quality defaults."""
 
         pipeline = self._load_pipeline()
 
@@ -546,4 +573,7 @@ class ClothGeneratorService:
             "Cloth generation request completed in %.1fs",
             time.monotonic() - request_started_at,
         )
+        if self.settings.cloth_unload_after_request:
+            del pipeline
+            self._clear_accelerator_cache()
         return results

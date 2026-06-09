@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.config import get_settings
 from app.routes.files import router as files_router
 from app.routes.generate_clothes import router as generate_clothes_router
+from app.routes.generate_clothes_jobs import router as generate_clothes_jobs_router
 from app.routes.health import router as health_router
 from app.routes.virtual_tryon import router as virtual_tryon_router
 from app.routes.virtual_tryon_jobs import router as virtual_tryon_jobs_router
@@ -19,13 +20,14 @@ settings = get_settings()
 
 app = FastAPI(
     title="virtual-tryon-ai-mvp",
-    description="Two-stage AI virtual try-on MVP (fast cloth generation + lightweight try-on backend)",
+    description="Two-stage AI virtual try-on MVP (SDXL cloth generation + FASHN VTON backend)",
     version="0.1.0",
 )
 
 app.include_router(health_router)
 app.include_router(files_router)
 app.include_router(generate_clothes_router)
+app.include_router(generate_clothes_jobs_router)
 app.include_router(virtual_tryon_router)
 app.include_router(virtual_tryon_jobs_router)
 

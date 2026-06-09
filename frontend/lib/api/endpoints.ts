@@ -1,5 +1,7 @@
 import { apiClient } from "@/lib/api/client";
 import {
+  generateClothesJobCreateResponseSchema,
+  generateClothesJobStatusResponseSchema,
   generateClothesRequestSchema,
   generateClothesResponseSchema,
   healthResponseSchema,
@@ -9,6 +11,8 @@ import {
   virtualTryOnResponseSchema,
   type GenerateClothesRequest,
   type GenerateClothesResponse,
+  type GenerateClothesJobCreateResponse,
+  type GenerateClothesJobStatusResponse,
   type HealthResponse,
   type VirtualTryOnJobCreateResponse,
   type VirtualTryOnJobStatusResponse,
@@ -25,6 +29,17 @@ export async function generateClothes(input: GenerateClothesRequest): Promise<Ge
   const payload = generateClothesRequestSchema.parse(input);
   const data = await apiClient.post("/generate-clothes", payload);
   return generateClothesResponseSchema.parse(data);
+}
+
+export async function createGenerateClothesJob(input: GenerateClothesRequest): Promise<GenerateClothesJobCreateResponse> {
+  const payload = generateClothesRequestSchema.parse(input);
+  const data = await apiClient.post("/generate-clothes-jobs", payload);
+  return generateClothesJobCreateResponseSchema.parse(data);
+}
+
+export async function getGenerateClothesJob(jobId: string): Promise<GenerateClothesJobStatusResponse> {
+  const data = await apiClient.get(`/generate-clothes-jobs/${jobId}`);
+  return generateClothesJobStatusResponseSchema.parse(data);
 }
 
 export async function virtualTryOnFromUpload(formData: FormData): Promise<VirtualTryOnResponse> {

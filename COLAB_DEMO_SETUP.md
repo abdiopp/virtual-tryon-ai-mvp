@@ -5,7 +5,7 @@ This guide shows how to run the backend from this repo in Google Colab for a dem
 It is optimized for:
 
 - Fast setup
-- Free / low-cost demo use
+- Colab GPU demo quality
 - A small number of requests, not production traffic
 
 ## What This Runs
@@ -27,16 +27,19 @@ For a demo, keep the backend only in Colab first. Add the Next.js frontend later
 
 - You need a Google account
 - If the model repo is gated, you may need a Hugging Face token
-- Keep the request size small for faster results
+- In Colab, choose a GPU runtime before installing dependencies
+- Keep one request active at a time so SDXL and try-on do not compete for VRAM
 
-Suggested demo settings:
+Suggested Colab GPU settings:
 
-- `DEVICE=cpu` if GPU is unavailable or unstable
+- `DEVICE=auto`
 - `NON_CUDA_FORCE_FAST_LIMITS=true`
 - `count=1`
-- `width=512`
-- `height=768`
-- `num_inference_steps=4`
+- `width=768`
+- `height=1024`
+- `num_inference_steps=30`
+- `FASHN_NUM_TIMESTEPS=30`
+- `FASHN_GUIDANCE_SCALE=1.5`
 
 ## Colab Notebook Cells
 
@@ -53,7 +56,6 @@ If the repo is private, upload a zip or use your auth method of choice.
 
 ```bash
 !pip install -r requirements.txt
-!pip install einops tqdm matplotlib onnxruntime fashn-human-parser
 ```
 
 If Colab asks for more packages during the try-on stage, install them there rather than changing the repo first.
@@ -61,13 +63,22 @@ If Colab asks for more packages during the try-on stage, install them there rath
 ### 3) Set environment variables
 
 ```bash
-%env DEVICE=cpu
+%env DEVICE=auto
 %env NON_CUDA_FORCE_FAST_LIMITS=true
-%env CLOTH_MODEL_ID=stabilityai/sd-turbo
+%env CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0
 %env TRYON_BACKEND=fashn_vton
+%env FASHN_NUM_TIMESTEPS=30
+%env FASHN_GUIDANCE_SCALE=1.5
+%env CLOTH_UNLOAD_AFTER_REQUEST=true
 %env MODEL_CACHE_DIR=models/huggingface
 %env OUTPUT_DIR=outputs
 %env UPLOAD_DIR=uploads
+```
+
+If Colab reports CUDA out-of-memory during cloth generation, add:
+
+```bash
+%env CLOTH_ENABLE_MODEL_CPU_OFFLOAD=true
 ```
 
 If needed:
@@ -103,22 +114,35 @@ Colab will keep this running in the cell output. In a new cell, you can test the
 !curl http://127.0.0.1:8000/health
 ```
 
+For Colab GPU quality, the health response should include `"device":"cuda"` and `"cuda_available":true`.
+If it reports `"device":"cpu"`, switch the notebook runtime to a GPU runtime and restart from the install cell.
+
 ### 7) Try garment generation
 
+Use the async job endpoint when calling through a public tunnel. It avoids the 120-second proxy timeout while SDXL is still working.
+
 ```bash
-!curl -X POST http://127.0.0.1:8000/generate-clothes \
+!curl -X POST http://127.0.0.1:8000/generate-clothes-jobs \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "oversized black hoodie with minimal logo",
     "category": "hoodie",
     "count": 1,
-    "width": 512,
-    "height": 768,
-    "guidance_scale": 0.0,
-    "num_inference_steps": 4,
+    "width": 768,
+    "height": 1024,
+    "guidance_scale": 7.0,
+    "num_inference_steps": 30,
     "seed": 123
   }'
 ```
+
+Copy the returned `job_id`, then poll:
+
+```bash
+!curl http://127.0.0.1:8000/generate-clothes-jobs/YOUR_JOB_ID
+```
+
+The old `/generate-clothes` endpoint still works for local requests, but tunnels can time it out before the model finishes.
 
 ### 8) Try virtual try-on from local paths
 
@@ -179,14 +203,17 @@ For this project:
 ## Good Demo Limits
 
 - Keep `count=1`
-- Keep `num_inference_steps` between `2` and `6`
-- Keep resolution near `512x768`
+- Keep cloth generation near `768x1024` with 30 steps on Colab GPU
+- Keep FASHN try-on at 30 steps for balanced quality, or 50 steps if you have enough time and VRAM
 - Prefer one request at a time
+
+For CPU fallback, use `DEVICE=cpu`, `width=512`, `height=768`, and `num_inference_steps=14`.
 
 ## Common Failure Fixes
 
 - If the model cache is incomplete, rerun `python scripts/download_models.py`
 - If try-on fails, rerun `python scripts/download_models.py --only-tryon`
+- If a public tunnel shows a 120-second proxy timeout, use `/generate-clothes-jobs` and poll the returned job id instead of calling `/generate-clothes`.
+- If generation logs `resolution downscaled from 768x1024`, `/health` is probably reporting CPU; enable a Colab GPU runtime or set `NON_CUDA_FORCE_FAST_LIMITS=false` only if you accept slow CPU generation.
 - If Colab disconnects, restart the notebook cell sequence from the top
 - If responses are slow, lower steps or use smaller images
-
