@@ -74,7 +74,9 @@ LEFFA_ALLOW_PATTERNS = [
 LEFFA_REQUIRED_FILES = [
     "virtual_tryon.pth",
     "virtual_tryon_dc.pth",
-    "stable-diffusion-inpainting/model_index.json",
+    "stable-diffusion-inpainting/scheduler/scheduler_config.json",
+    "stable-diffusion-inpainting/unet/config.json",
+    "stable-diffusion-inpainting/vae/config.json",
     "densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
     "densepose/model_final_162be9.pkl",
     "humanparsing/parsing_atr.onnx",
