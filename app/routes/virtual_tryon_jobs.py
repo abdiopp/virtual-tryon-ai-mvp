@@ -16,10 +16,12 @@ from app.schemas import (
     VirtualTryOnJobStatusResponse,
     VirtualTryOnPathRequest,
 )
+from app.config import get_settings
 from app.services.storage_service import StorageService
-from app.services.tryon_service import TryOnSetupError, get_tryon_service
+from app.services.tryon_service import TryOnCloudLimitError, TryOnSetupError, get_tryon_service
 
 router = APIRouter(tags=["virtual-tryon-jobs"])
+settings = get_settings()
 storage = StorageService()
 tryon_service = get_tryon_service()
 executor = ThreadPoolExecutor(max_workers=1)
@@ -55,6 +57,15 @@ def _create_job() -> TryOnJob:
     job_id = uuid4().hex
     job = TryOnJob(job_id=job_id, status="queued", created_at=time.time(), updated_at=time.time())
     with job_lock:
+        active_jobs = sum(1 for existing in JOBS.values() if existing.status in {"queued", "running"})
+        if active_jobs >= settings.tryon_max_queued_jobs:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many try-on jobs are already queued or running. "
+                    f"Limit: {settings.tryon_max_queued_jobs}."
+                ),
+            )
         JOBS[job_id] = job
     return job
 
@@ -74,6 +85,8 @@ def _run_job(job_id: str, *, person_path: Path, garment_path: Path, category: st
             metadata=result.metadata,
             error=None,
         )
+    except TryOnCloudLimitError as error:
+        _set_job(job_id, status="failed", error=str(error), metadata={"status_code": error.status_code})
     except (FileNotFoundError, ValueError, TryOnSetupError) as error:
         _set_job(job_id, status="failed", error=str(error))
     except Exception as error:  # pragma: no cover - unexpected runtime failure

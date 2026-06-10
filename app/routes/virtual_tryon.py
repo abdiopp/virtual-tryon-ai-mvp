@@ -7,7 +7,7 @@ import time
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.schemas import VirtualTryOnPathRequest, VirtualTryOnResponse
-from app.services.tryon_service import TryOnSetupError, get_tryon_service
+from app.services.tryon_service import TryOnCloudLimitError, TryOnSetupError, get_tryon_service
 from app.services.storage_service import StorageService
 from app.utils.logging_utils import get_logger
 
@@ -48,6 +48,13 @@ def virtual_tryon_upload(
             error,
         )
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except TryOnCloudLimitError as error:
+        logger.warning(
+            "Virtual-tryon upload request hit cloud limit after %.1fs: %s",
+            time.monotonic() - started_at,
+            error,
+        )
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except TryOnSetupError as error:
         logger.warning(
             "Virtual-tryon upload request failed after %.1fs: %s",
@@ -90,6 +97,13 @@ def virtual_tryon_from_path(payload: VirtualTryOnPathRequest) -> VirtualTryOnRes
             error,
         )
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except TryOnCloudLimitError as error:
+        logger.warning(
+            "Virtual-tryon path request hit cloud limit after %.1fs: %s",
+            time.monotonic() - started_at,
+            error,
+        )
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except TryOnSetupError as error:
         logger.warning(
             "Virtual-tryon path request failed after %.1fs: %s",

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.services.tryon_service import (
+    TryOnCloudLimitError,
     HuggingFaceSpaceTryOnService,
     get_tryon_service,
     normalize_tryon_backend,
@@ -102,3 +103,57 @@ def test_huggingface_space_tryon_copies_remote_output(
         "seed": 42,
         "api_name": "/tryon",
     }
+
+
+def test_huggingface_space_tryon_retries_transient_limit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        HF_TOKEN="",
+        TRYON_BACKEND="huggingface_space",
+        TRYON_SPACE_MAX_RETRIES=1,
+        TRYON_SPACE_RETRY_BACKOFF_SECONDS=0,
+        OUTPUT_DIR=tmp_path / "outputs",
+        UPLOAD_DIR=tmp_path / "uploads",
+    )
+    settings.ensure_directories()
+    person_path = tmp_path / "person.png"
+    garment_path = tmp_path / "garment.png"
+    remote_output_path = tmp_path / "remote_output.png"
+    person_path.write_bytes(b"person")
+    garment_path.write_bytes(b"garment")
+    remote_output_path.write_bytes(b"remote-output")
+
+    calls = {"predict": 0}
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def predict(self, **kwargs: object) -> tuple[str, str]:
+            calls["predict"] += 1
+            if calls["predict"] == 1:
+                raise RuntimeError("429 too many requests")
+            return (str(remote_output_path), str(tmp_path / "mask.png"))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "gradio_client",
+        SimpleNamespace(Client=FakeClient, file=lambda path: path),
+    )
+
+    service = HuggingFaceSpaceTryOnService(settings)
+    result = service.run_tryon(person_path, garment_path, category="upper_body")
+
+    assert Path(result.result_path).read_bytes() == b"remote-output"
+    assert calls["predict"] == 2
+
+
+def test_huggingface_space_error_classifier_maps_rate_limit(tmp_path: Path) -> None:
+    service = HuggingFaceSpaceTryOnService(_settings(tmp_path))
+
+    error = service._classify_space_error(RuntimeError("429 too many requests"))
+
+    assert isinstance(error, TryOnCloudLimitError)
+    assert error.status_code == 429

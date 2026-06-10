@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     tryon_space_seed: int = Field(default=42, alias="TRYON_SPACE_SEED")
     tryon_space_auto_mask: bool = Field(default=True, alias="TRYON_SPACE_AUTO_MASK")
     tryon_space_auto_crop: bool = Field(default=False, alias="TRYON_SPACE_AUTO_CROP")
+    tryon_space_timeout_seconds: int = Field(default=180, ge=1, alias="TRYON_SPACE_TIMEOUT_SECONDS")
+    tryon_space_max_retries: int = Field(default=2, ge=0, alias="TRYON_SPACE_MAX_RETRIES")
+    tryon_space_retry_backoff_seconds: float = Field(default=2.0, ge=0, alias="TRYON_SPACE_RETRY_BACKOFF_SECONDS")
+    tryon_max_queued_jobs: int = Field(default=8, ge=1, alias="TRYON_MAX_QUEUED_JOBS")
     leffa_repo_url: str = Field(
         default="https://github.com/franciszzj/Leffa.git",
         alias="LEFFA_REPO_URL",

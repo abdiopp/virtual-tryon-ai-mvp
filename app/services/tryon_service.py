@@ -11,6 +11,7 @@ import sys
 import time
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -233,6 +234,14 @@ class TryOnSetupError(RuntimeError):
     """Raised when try-on setup is incomplete or incompatible."""
 
 
+class TryOnCloudLimitError(TryOnSetupError):
+    """Raised when the remote Space is busy, rate-limited, or timed out."""
+
+    def __init__(self, message: str, *, status_code: int = 503) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 @dataclass
 class VirtualTryOnResult:
     """Result payload returned by try-on service."""
@@ -282,6 +291,80 @@ class HuggingFaceSpaceTryOnService:
             raise TryOnSetupError(f"Hugging Face Space output image was not downloaded: {path}")
         return path
 
+    def _classify_space_error(self, error: BaseException) -> TryOnCloudLimitError | None:
+        """Map common Hugging Face/Gradio limit failures to clearer errors."""
+
+        message = str(error)
+        lowered = message.lower()
+        if "429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
+            return TryOnCloudLimitError(
+                "Hugging Face Space rate limit reached. Please wait and retry.",
+                status_code=429,
+            )
+        if "queue" in lowered and any(term in lowered for term in ("full", "busy", "limit", "capacity")):
+            return TryOnCloudLimitError(
+                "Hugging Face Space queue is currently full or busy. Please retry shortly.",
+                status_code=429,
+            )
+        if "timeout" in lowered or "timed out" in lowered:
+            return TryOnCloudLimitError(
+                "Hugging Face Space request timed out. Please retry shortly.",
+                status_code=504,
+            )
+        if "503" in lowered or "temporarily unavailable" in lowered or "space is sleeping" in lowered:
+            return TryOnCloudLimitError(
+                "Hugging Face Space is temporarily unavailable or waking up. Please retry shortly.",
+                status_code=503,
+            )
+        return None
+
+    def _predict_with_timeout(self, client: Any, **kwargs: object) -> Any:
+        timeout_seconds = self.settings.tryon_space_timeout_seconds
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(client.predict, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeoutError as error:
+            future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise TryOnCloudLimitError(
+                f"Hugging Face Space request exceeded {timeout_seconds} seconds.",
+                status_code=504,
+            ) from error
+        finally:
+            if future.done():
+                executor.shutdown(wait=False, cancel_futures=True)
+
+    def _predict_with_retries(self, client: Any, **kwargs: object) -> Any:
+        max_attempts = self.settings.tryon_space_max_retries + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._predict_with_timeout(client, **kwargs)
+            except TryOnCloudLimitError:
+                if attempt >= max_attempts:
+                    raise
+                self.logger.warning(
+                    "Hugging Face Space limit on attempt %d/%d; retrying.",
+                    attempt,
+                    max_attempts,
+                )
+            except Exception as error:
+                limit_error = self._classify_space_error(error)
+                if limit_error is None or attempt >= max_attempts:
+                    if limit_error is not None:
+                        raise limit_error from error
+                    raise
+                self.logger.warning(
+                    "Hugging Face Space transient failure on attempt %d/%d: %s",
+                    attempt,
+                    max_attempts,
+                    error,
+                )
+
+            time.sleep(self.settings.tryon_space_retry_backoff_seconds * attempt)
+
+        raise TryOnCloudLimitError("Hugging Face Space retry limit reached.", status_code=503)
+
     def run_tryon(
         self,
         person_image_path: Path | str,
@@ -326,7 +409,8 @@ class HuggingFaceSpaceTryOnService:
                 verbose=False,
                 download_files=target_output_path.parent,
             )
-            result = client.predict(
+            result = self._predict_with_retries(
+                client,
                 dict={
                     "background": file(str(person_path)),
                     "layers": [],
@@ -340,6 +424,8 @@ class HuggingFaceSpaceTryOnService:
                 seed=self.settings.tryon_space_seed,
                 api_name=self.settings.tryon_space_api_name,
             )
+        except TryOnCloudLimitError:
+            raise
         except Exception as error:
             raise TryOnSetupError(
                 "Hugging Face Space try-on failed. Confirm the Space is available and HF_TOKEN is set "
