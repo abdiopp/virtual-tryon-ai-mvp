@@ -41,6 +41,8 @@ Suggested Colab GPU settings:
 - `LEFFA_NUM_INFERENCE_STEPS=30`
 - `LEFFA_GUIDANCE_SCALE=2.5`
 - `LEFFA_MODEL_TYPE=auto`
+- `LEFFA_REQUIRE_CUDA=true`
+- `LEFFA_MEMORY_EFFICIENT_LOAD=true`
 
 ## Colab Notebook Cells
 
@@ -72,6 +74,8 @@ If Colab asks for more packages during the try-on stage, install them there rath
 %env LEFFA_GUIDANCE_SCALE=2.5
 %env LEFFA_MODEL_TYPE=auto
 %env LEFFA_REPAINT=false
+%env LEFFA_REQUIRE_CUDA=true
+%env LEFFA_MEMORY_EFFICIENT_LOAD=true
 %env CLOTH_UNLOAD_AFTER_REQUEST=true
 %env MODEL_CACHE_DIR=models/huggingface
 %env OUTPUT_DIR=outputs

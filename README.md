@@ -70,6 +70,8 @@ Main keys from `.env.example`:
 - `LEFFA_GUIDANCE_SCALE=2.5`
 - `LEFFA_MODEL_TYPE=auto`
 - `LEFFA_REPAINT=false`
+- `LEFFA_REQUIRE_CUDA=true`
+- `LEFFA_MEMORY_EFFICIENT_LOAD=true`
 - `FASHN_MODEL_DIR=models/fashn_vton`
 - `FASHN_WEIGHTS_DIR=models/fashn_weights`
 - `FASHN_NUM_TIMESTEPS=30`

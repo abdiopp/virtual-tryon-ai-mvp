@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     leffa_ref_acceleration: bool = Field(default=False, alias="LEFFA_REF_ACCELERATION")
     leffa_repaint: bool = Field(default=False, alias="LEFFA_REPAINT")
     leffa_preprocess_garment: bool = Field(default=False, alias="LEFFA_PREPROCESS_GARMENT")
+    leffa_require_cuda: bool = Field(default=True, alias="LEFFA_REQUIRE_CUDA")
+    leffa_memory_efficient_load: bool = Field(default=True, alias="LEFFA_MEMORY_EFFICIENT_LOAD")
 
     fashn_repo_url: str = Field(
         default="https://github.com/fashn-AI/fashn-vton-1.5.git",

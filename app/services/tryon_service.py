@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -200,8 +201,20 @@ def _run_subprocess_with_live_logs(
         return_code = process.wait()
         if return_code != 0:
             joined_output = "\n".join(captured_lines)
+            return_summary = f"Return code: {return_code}"
+            if return_code < 0:
+                signal_number = -return_code
+                try:
+                    signal_name = signal.Signals(signal_number).name
+                except ValueError:
+                    signal_name = f"signal {signal_number}"
+                return_summary = (
+                    f"Process was terminated by {signal_name} ({signal_number}). "
+                    "On Colab this usually means the runtime killed the process for RAM/VRAM pressure."
+                )
             raise TryOnSetupError(
                 f"{failure_message}\n"
+                f"{return_summary}\n"
                 "Command:\n"
                 f"{' '.join(command)}\n"
                 f"OUTPUT:\n{joined_output}"
@@ -333,6 +346,10 @@ class LeffaTryOnService:
             command.append("--repaint")
         if self.settings.leffa_preprocess_garment:
             command.append("--preprocess-garment")
+        if self.settings.leffa_require_cuda:
+            command.append("--require-cuda")
+        if self.settings.leffa_memory_efficient_load:
+            command.append("--memory-efficient-load")
 
         return command
 
@@ -361,6 +378,13 @@ class LeffaTryOnService:
         """Run Leffa inference and return final try-on image path."""
 
         self._validate_setup()
+        if self.settings.leffa_require_cuda and self.runtime_device != "cuda":
+            raise TryOnSetupError(
+                "Leffa requires a CUDA GPU for practical inference, but this runtime resolved to "
+                f"{self.runtime_device!r}. In Colab, choose Runtime > Change runtime type > GPU, "
+                "then restart from the install/setup cells. To force a slow unsupported CPU attempt, "
+                "set LEFFA_REQUIRE_CUDA=false."
+            )
 
         person_path = ensure_image_exists(person_image_path)
         garment_path = ensure_image_exists(garment_image_path)

@@ -8,6 +8,8 @@ subprocess lets the API release GPU memory between requests on Colab.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -50,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ref-acceleration", action="store_true")
     parser.add_argument("--repaint", action="store_true")
     parser.add_argument("--preprocess-garment", action="store_true")
+    parser.add_argument("--require-cuda", action="store_true")
+    parser.add_argument("--memory-efficient-load", action="store_true")
     return parser.parse_args()
 
 
@@ -79,6 +83,58 @@ def load_repo_modules(repo_dir: Path) -> None:
     os.chdir(resolved_repo)
 
 
+def report_memory(label: str) -> None:
+    """Print lightweight memory diagnostics when the optional deps are present."""
+
+    details: list[str] = []
+    try:
+        import psutil
+
+        rss_gb = psutil.Process(os.getpid()).memory_info().rss / (1024**3)
+        details.append(f"rss={rss_gb:.2f}GB")
+    except Exception:
+        pass
+
+    if torch.cuda.is_available():
+        allocated_gb = torch.cuda.memory_allocated() / (1024**3)
+        reserved_gb = torch.cuda.memory_reserved() / (1024**3)
+        details.append(f"cuda_allocated={allocated_gb:.2f}GB")
+        details.append(f"cuda_reserved={reserved_gb:.2f}GB")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    print(f"Leffa memory {label}{suffix}", flush=True)
+
+
+@contextlib.contextmanager
+def memory_efficient_torch_load(enabled: bool):
+    """Use lower-memory torch.load options when the installed PyTorch supports them."""
+
+    if not enabled:
+        yield
+        return
+
+    original_load = torch.load
+    supported_parameters = inspect.signature(torch.load).parameters
+
+    def patched_load(f, *args, **kwargs):
+        if "weights_only" in supported_parameters:
+            kwargs.setdefault("weights_only", True)
+        if "mmap" in supported_parameters and isinstance(f, (str, os.PathLike)):
+            kwargs.setdefault("mmap", True)
+        try:
+            return original_load(f, *args, **kwargs)
+        except TypeError:
+            kwargs.pop("weights_only", None)
+            kwargs.pop("mmap", None)
+            return original_load(f, *args, **kwargs)
+
+    torch.load = patched_load
+    try:
+        yield
+    finally:
+        torch.load = original_load
+
+
 def main() -> int:
     """Run Leffa inference and write the generated image."""
 
@@ -93,8 +149,16 @@ def main() -> int:
     model_type = resolve_model_type(args.model_type, category)
     checkpoint_name = "virtual_tryon.pth" if model_type == "viton_hd" else "virtual_tryon_dc.pth"
 
+    if args.require_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available, but Leffa was started with --require-cuda. "
+            "In Colab, choose Runtime > Change runtime type > GPU and restart the runtime."
+        )
+
+    report_memory("startup")
     load_repo_modules(repo_dir)
 
+    print("Leffa importing modules", flush=True)
     from leffa.inference import LeffaInference
     from leffa.model import LeffaModel
     from leffa.transform import LeffaTransform
@@ -107,6 +171,7 @@ def main() -> int:
     )
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
+    report_memory("after imports")
 
     torch.backends.cuda.matmul.allow_tf32 = torch.cuda.is_available()
     torch.backends.cudnn.allow_tf32 = torch.cuda.is_available()
@@ -114,13 +179,24 @@ def main() -> int:
     print(f"Leffa loading checkpoints from {checkpoint_dir}", flush=True)
     dtype = "float16" if torch.cuda.is_available() else "float32"
 
-    model = LeffaModel(
-        pretrained_model_name_or_path=str((checkpoint_dir / "stable-diffusion-inpainting").resolve()),
-        pretrained_model=str((checkpoint_dir / checkpoint_name).resolve()),
-        dtype=dtype,
-    )
-    inference = LeffaInference(model=model)
+    with memory_efficient_torch_load(args.memory_efficient_load):
+        print(
+            "Leffa building diffusion model "
+            f"checkpoint={checkpoint_name} dtype={dtype} memory_efficient_load={args.memory_efficient_load}",
+            flush=True,
+        )
+        model = LeffaModel(
+            pretrained_model_name_or_path=str((checkpoint_dir / "stable-diffusion-inpainting").resolve()),
+            pretrained_model=str((checkpoint_dir / checkpoint_name).resolve()),
+            dtype=dtype,
+        )
+    report_memory("after diffusion model load")
 
+    print("Leffa moving diffusion model to runtime device", flush=True)
+    inference = LeffaInference(model=model)
+    report_memory("after diffusion model device move")
+
+    print("Leffa loading preprocessing models", flush=True)
     parsing = Parsing(
         atr_path=str((checkpoint_dir / "humanparsing" / "parsing_atr.onnx").resolve()),
         lip_path=str((checkpoint_dir / "humanparsing" / "parsing_lip.onnx").resolve()),
@@ -132,6 +208,7 @@ def main() -> int:
         config_path=str((checkpoint_dir / "densepose" / "densepose_rcnn_R_50_FPN_s1x.yaml").resolve()),
         weights_path=str((checkpoint_dir / "densepose" / "model_final_162be9.pkl").resolve()),
     )
+    report_memory("after preprocessing models load")
 
     print(f"Leffa preprocessing person={person_path} garment={garment_path}", flush=True)
     src_image = Image.open(person_path).convert("RGB")
