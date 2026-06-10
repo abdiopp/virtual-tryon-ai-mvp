@@ -1,38 +1,25 @@
-"""Lightweight cloth generation service using Diffusers text-to-image pipelines."""
+"""Remote cloth generation service using Hugging Face Inference Providers."""
 
 from __future__ import annotations
 
-import gc
-import math
 import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import torch
-from diffusers import AutoPipelineForText2Image, DiffusionPipeline
-from huggingface_hub import snapshot_download
+from huggingface_hub import InferenceClient
+from PIL import Image, ImageChops
 
 from app.config import Settings, get_settings
 from app.services.storage_service import StorageService
-from app.utils.device import require_cuda_if_requested, resolve_device
 from app.utils.image_utils import save_image
 from app.utils.logging_utils import get_logger
 
 DEFAULT_NEGATIVE_PROMPT = (
     "low quality, blurry, distorted, deformed clothing, bad fabric texture, "
-    "watermark, text, logo artifacts, human body, mannequin, duplicate sleeves, broken zipper"
-)
-
-_CLOTH_REQUIRED_SNAPSHOT_FILES = (
-    "model_index.json",
-    "scheduler",
-    "tokenizer",
-    "unet/config.json",
-)
-_CLOTH_WEIGHT_CANDIDATES = (
-    "unet/diffusion_pytorch_model.fp16.safetensors",
-    "unet/diffusion_pytorch_model.safetensors",
+    "watermark, text, logo artifacts, human body, mannequin, duplicate sleeves, broken zipper, "
+    "cropped garment, close-up fabric, partial clothing, cut off edges, out of frame, edge touching, "
+    "sleeves cut off, cuffs cut off, hem cut off, zoomed-in product crop"
 )
 
 
@@ -52,81 +39,21 @@ class ClothGenerationResultItem:
 
 
 class ClothGeneratorService:
-    """Service responsible for fast garment product image generation."""
+    """Service responsible for remote garment product image generation."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        self.device = resolve_device(self.settings.device)
         self.storage = StorageService(self.settings)
         self.logger = get_logger(__name__)
-        self.pipeline: DiffusionPipeline | None = None
 
     def is_model_available(self) -> bool:
-        """Check whether cloth generation model exists locally."""
+        """Check whether remote cloth generation is configured."""
 
-        model_path = Path(self.settings.cloth_model_id)
-        if model_path.exists():
-            try:
-                self._validate_cloth_snapshot(model_path)
-                return True
-            except ClothGenerationError:
-                return False
-
-        try:
-            snapshot_path = Path(
-                snapshot_download(
-                    repo_id=self.settings.cloth_model_id,
-                    cache_dir=str(self.settings.model_cache_dir),
-                    allow_patterns=["model_index.json"],
-                    local_files_only=True,
-                    token=self.settings.hf_token,
-                )
-            )
-            self._validate_cloth_snapshot(snapshot_path)
-            return True
-        except Exception:
-            return False
-
-    def _validate_cloth_snapshot(self, snapshot_path: Path) -> None:
-        """Ensure the local cloth snapshot contains the files diffusers needs."""
-
-        missing = [
-            snapshot_path / relative
-            for relative in _CLOTH_REQUIRED_SNAPSHOT_FILES
-            if not (snapshot_path / relative).exists()
-        ]
-        if not any((snapshot_path / candidate).exists() for candidate in _CLOTH_WEIGHT_CANDIDATES):
-            missing.extend(snapshot_path / relative for relative in _CLOTH_WEIGHT_CANDIDATES)
-
-        if missing:
-            joined = "\n".join(f"- {path}" for path in missing)
-            raise ClothGenerationError(
-                "Cloth model cache is incomplete. Missing required files:\n"
-                f"{joined}\n"
-                "Run `python scripts/download_models.py --only-clothes` to repair the cache."
-            )
-
-    def _validate_local_model_source(self, model_path: Path) -> None:
-        """Validate a directly configured local cloth model path."""
-
-        if not model_path.exists():
-            raise ClothGenerationError(f"Configured CLOTH_MODEL_ID path does not exist: {model_path}")
-        self._validate_cloth_snapshot(model_path)
-
-    def _resolve_cached_snapshot(self) -> Path:
-        """Resolve the local cloth snapshot path and validate it."""
-
-        snapshot_path = Path(
-            snapshot_download(
-                repo_id=self.settings.cloth_model_id,
-                cache_dir=str(self.settings.model_cache_dir),
-                allow_patterns=["model_index.json"],
-                local_files_only=True,
-                token=self.settings.hf_token,
-            )
+        return bool(
+            self.settings.hf_token
+            and self.settings.cloth_model_id
+            and self.settings.cloth_inference_provider
         )
-        self._validate_cloth_snapshot(snapshot_path)
-        return snapshot_path
 
     def _enhance_prompt(self, prompt: str, category: str | None = None) -> str:
         """Optionally transform user prompt into product-style garment prompt."""
@@ -139,187 +66,11 @@ class ClothGeneratorService:
         category_value = (category or "garment").strip()
         return template.format(prompt=clean_prompt, category=category_value)
 
-    def _resolve_model_source(self) -> str:
-        """Resolve local model source path when local-only mode is enabled."""
+    def _is_flux_schnell_model(self, model_id: str) -> bool:
+        normalized = model_id.lower()
+        return "flux" in normalized and "schnell" in normalized
 
-        model_path = Path(self.settings.cloth_model_id)
-        if model_path.exists():
-            self._validate_local_model_source(model_path)
-            return str(model_path)
-
-        if self.settings.cloth_local_files_only:
-            try:
-                return str(self._resolve_cached_snapshot())
-            except Exception as error:
-                raise ClothGenerationError(
-                    "CLOTH_LOCAL_FILES_ONLY is enabled but model is not fully cached. "
-                    "Run `python scripts/download_models.py --only-clothes` first, or set "
-                    "CLOTH_LOCAL_FILES_ONLY=false."
-                ) from error
-
-        return self.settings.cloth_model_id
-
-    def _is_turbo_model(self, model_id: str) -> bool:
-        return "turbo" in model_id.lower()
-
-    def _is_sdxl_base_model(self, model_id: str) -> bool:
-        model_id_lower = model_id.lower()
-        return "sdxl" in model_id_lower or "stable-diffusion-xl" in model_id_lower
-
-    def _resolve_dtype(self) -> torch.dtype:
-        if self.device == "cuda":
-            return torch.float16
-        if self.device == "mps" and self.settings.mps_use_fp16:
-            return torch.float16
-        return torch.float32
-
-    def _load_pipeline(self) -> DiffusionPipeline:
-        """Lazy-load text-to-image pipeline."""
-
-        if self.pipeline is not None:
-            return self.pipeline
-
-        require_cuda_if_requested(self.settings.device)
-
-        dtype = self._resolve_dtype()
-        model_source = self._resolve_model_source()
-        load_kwargs: dict[str, object] = {
-            "torch_dtype": dtype,
-            "cache_dir": str(self.settings.model_cache_dir),
-            "use_safetensors": True,
-            "local_files_only": self.settings.cloth_local_files_only,
-        }
-        if self.device == "cuda":
-            load_kwargs["variant"] = "fp16"
-
-        try:
-            pipeline = AutoPipelineForText2Image.from_pretrained(model_source, **load_kwargs)
-        except Exception as first_error:
-            if "variant" in load_kwargs:
-                load_kwargs.pop("variant")
-                try:
-                    pipeline = AutoPipelineForText2Image.from_pretrained(model_source, **load_kwargs)
-                except Exception as second_error:
-                    raise ClothGenerationError(
-                        "Failed to load cloth generation model. "
-                        "Run `python scripts/download_models.py --only-clothes` and retry."
-                    ) from second_error
-            else:
-                raise ClothGenerationError(
-                    "Failed to load cloth generation model. "
-                    "Run `python scripts/download_models.py --only-clothes` and retry."
-                ) from first_error
-
-        if self.settings.cloth_lora_path:
-            lora_path = Path(self.settings.cloth_lora_path)
-            if not lora_path.exists():
-                raise ClothGenerationError(f"Configured CLOTH_LORA_PATH does not exist: {lora_path}")
-            try:
-                pipeline.load_lora_weights(str(lora_path))
-                self.logger.info("Loaded LoRA weights from %s", lora_path)
-            except Exception as error:
-                raise ClothGenerationError(
-                    f"Unable to load LoRA weights from {lora_path}: {error}"
-                ) from error
-
-        placement = self.device
-        if self.device == "cuda" and self.settings.cloth_enable_model_cpu_offload:
-            try:
-                pipeline.enable_model_cpu_offload()
-            except Exception as error:
-                raise ClothGenerationError(
-                    "Unable to enable model CPU offload. Install `accelerate` or set "
-                    "CLOTH_ENABLE_MODEL_CPU_OFFLOAD=false."
-                ) from error
-            placement = "cuda+cpu-offload"
-        else:
-            pipeline = pipeline.to(self.device)
-        pipeline.set_progress_bar_config(disable=True)
-        if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
-            pipeline.vae.enable_slicing()
-        else:
-            pipeline.enable_vae_slicing()
-        if self.device != "cuda":
-            pipeline.enable_attention_slicing()
-
-        if not self.settings.cloth_unload_after_request:
-            self.pipeline = pipeline
-        self.logger.info(
-            "Cloth pipeline loaded on device=%s | dtype=%s | source=%s | cached=%s",
-            placement,
-            dtype,
-            model_source,
-            not self.settings.cloth_unload_after_request,
-        )
-        return pipeline
-
-    def _clear_accelerator_cache(self) -> None:
-        """Release cached pipeline references and accelerator memory after large generations."""
-
-        self.pipeline = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        if (
-            hasattr(torch, "mps")
-            and hasattr(torch.backends, "mps")
-            and torch.backends.mps.is_available()
-            and hasattr(torch.mps, "empty_cache")
-        ):
-            torch.mps.empty_cache()
-
-    def _fit_to_non_cuda_pixel_budget(self, width: int, height: int) -> tuple[int, int]:
-        """Downscale dimensions to respect configured non-CUDA pixel budget."""
-
-        max_pixels = self.settings.non_cuda_max_pixels
-        pixels = width * height
-        if pixels <= max_pixels:
-            return width, height
-
-        scale = math.sqrt(max_pixels / pixels)
-        resized_w = max(256, int((width * scale) // 64) * 64)
-        resized_h = max(256, int((height * scale) // 64) * 64)
-        return resized_w, resized_h
-
-    def _enforce_sdxl_quality_guardrails(
-        self,
-        width: int,
-        height: int,
-        guidance_scale: float,
-        num_inference_steps: int,
-        notes: list[str],
-    ) -> tuple[int, int, float, int]:
-        """Prevent low-step SDXL settings that commonly produce distorted outputs."""
-
-        tuned_width = width
-        tuned_height = height
-        tuned_guidance = guidance_scale
-        tuned_steps = num_inference_steps
-
-        if tuned_width < 512 or tuned_height < 512:
-            tuned_width = max(512, int(math.ceil(tuned_width / 64) * 64))
-            tuned_height = max(512, int(math.ceil(tuned_height / 64) * 64))
-            notes.append(
-                f"resolution upscaled for SDXL quality from {width}x{height} to {tuned_width}x{tuned_height}"
-            )
-
-        minimum_steps = 18 if self.device == "cuda" else 14
-        if tuned_steps < minimum_steps:
-            notes.append(
-                f"num_inference_steps raised from {tuned_steps} to {minimum_steps} for SDXL quality guardrails"
-            )
-            tuned_steps = minimum_steps
-
-        minimum_guidance = 5.5
-        if tuned_guidance < minimum_guidance:
-            notes.append(
-                f"guidance_scale raised from {tuned_guidance} to {minimum_guidance} for SDXL quality guardrails"
-            )
-            tuned_guidance = minimum_guidance
-
-        return tuned_width, tuned_height, tuned_guidance, tuned_steps
-
-    def _tune_request_for_performance(
+    def _tune_request_for_provider(
         self,
         count: int,
         width: int,
@@ -327,139 +78,85 @@ class ClothGeneratorService:
         guidance_scale: float,
         num_inference_steps: int,
     ) -> tuple[int, int, int, float, int, list[str]]:
-        """Apply speed-safe limits on non-CUDA devices."""
+        """Apply provider/model defaults without touching local hardware."""
 
         notes: list[str] = []
-        model_id = self.settings.cloth_model_id
-        is_turbo = self._is_turbo_model(model_id)
-        is_sdxl_base = self._is_sdxl_base_model(model_id)
-
         tuned_count = count
         tuned_width = width
         tuned_height = height
         tuned_guidance = guidance_scale
         tuned_steps = num_inference_steps
 
-        if is_sdxl_base:
-            tuned_width, tuned_height, tuned_guidance, tuned_steps = (
-                self._enforce_sdxl_quality_guardrails(
-                    width=tuned_width,
-                    height=tuned_height,
-                    guidance_scale=tuned_guidance,
-                    num_inference_steps=tuned_steps,
-                    notes=notes,
-                )
-            )
-
-        if self.device != "cuda" and self.settings.non_cuda_force_fast_limits:
-            max_count = max(1, self.settings.non_cuda_max_count)
-            if tuned_count > max_count:
-                notes.append(f"count capped from {tuned_count} to {max_count}")
-                tuned_count = max_count
-
-            # Keep SDXL quality guardrails intact; only cap non-SDXL models.
-            if not is_sdxl_base:
-                max_steps = max(1, self.settings.non_cuda_max_steps)
-                if is_turbo:
-                    max_steps = min(max_steps, 4)
-                if tuned_steps > max_steps:
-                    notes.append(f"num_inference_steps capped from {tuned_steps} to {max_steps}")
-                    tuned_steps = max_steps
-
-            adjusted_w, adjusted_h = self._fit_to_non_cuda_pixel_budget(tuned_width, tuned_height)
-            if adjusted_w != tuned_width or adjusted_h != tuned_height:
-                notes.append(
-                    f"resolution downscaled from {tuned_width}x{tuned_height} to {adjusted_w}x{adjusted_h}"
-                )
-                tuned_width, tuned_height = adjusted_w, adjusted_h
-
-        if is_turbo and tuned_guidance != 0.0:
-            notes.append(
-                "guidance_scale auto-set to 0.0 for turbo model best speed/quality behavior"
-            )
-            tuned_guidance = 0.0
+        if self._is_flux_schnell_model(self.settings.cloth_model_id):
+            if tuned_steps > 4:
+                notes.append(f"num_inference_steps capped from {tuned_steps} to 4 for Flux Schnell")
+                tuned_steps = 4
+            if tuned_guidance != 0.0:
+                notes.append("guidance_scale auto-set to 0.0 for Flux Schnell")
+                tuned_guidance = 0.0
 
         return tuned_count, tuned_width, tuned_height, tuned_guidance, tuned_steps, notes
 
-    def _build_generator(self, seed: int) -> torch.Generator:
-        """Create deterministic generator compatible with current backend."""
+    def _build_client(self) -> InferenceClient:
+        if not self.settings.hf_token:
+            raise ClothGenerationError(
+                "HF_TOKEN is required for remote cloth generation through Hugging Face Inference Providers."
+            )
 
-        if self.device == "cuda":
-            return torch.Generator(device="cuda").manual_seed(seed)
-
-        # MPS historically does not support torch.Generator("mps") reliably.
-        return torch.Generator(device="cpu").manual_seed(seed)
-
-    def _format_eta_seconds(self, elapsed_seconds: float, progress_ratio: float) -> float | None:
-        """Estimate remaining time from the current progress ratio."""
-
-        if progress_ratio <= 0.0:
-            return None
-
-        total_estimate = elapsed_seconds / progress_ratio
-        return max(0.0, total_estimate - elapsed_seconds)
-
-    def _run_pipeline_with_progress(
-        self,
-        pipeline: DiffusionPipeline,
-        pipe_kwargs: dict[str, object],
-        image_index: int,
-        total_images: int,
-        total_steps: int,
-    ):
-        """Run pipeline and emit periodic step progress logs."""
-
-        log_interval = max(1, total_steps // 4)
-        started_at = time.monotonic()
-
-        self.logger.info(
-            "Cloth generation step tracking started image=%d/%d total_steps=%d",
-            image_index,
-            total_images,
-            total_steps,
+        return InferenceClient(
+            provider=self.settings.cloth_inference_provider,
+            api_key=self.settings.hf_token,
         )
 
-        def _log_step(step_number: int) -> None:
-            if step_number == 1 or step_number == total_steps or step_number % log_interval == 0:
-                elapsed = time.monotonic() - started_at
-                progress_ratio = step_number / total_steps
-                percent = progress_ratio * 100
-                eta_seconds = self._format_eta_seconds(elapsed, progress_ratio)
-                eta_text = f"{eta_seconds:.1f}s" if eta_seconds is not None else "unknown"
-                self.logger.info(
-                    "Cloth generation progress image %d/%d step %d/%d (%.0f%%) elapsed=%.1fs eta=%s",
-                    image_index,
-                    total_images,
-                    step_number,
-                    total_steps,
-                    percent,
-                    elapsed,
-                    eta_text,
-                )
+    def _build_attempt_prompt(self, prompt: str, attempt_index: int) -> str:
+        """Make retries increasingly explicit about full-garment framing."""
 
-        def _step_end_callback(_pipe, step_index, _timestep, callback_kwargs):
-            _log_step(step_index + 1)
-            return callback_kwargs
+        if attempt_index <= 0:
+            return prompt
 
-        try:
-            return pipeline(
-                **pipe_kwargs,
-                callback_on_step_end=_step_end_callback,
-                callback_on_step_end_tensor_inputs=[],
-            )
-        except TypeError:
-            self.logger.info(
-                "Falling back to legacy diffusers callback API for progress logging."
-            )
+        return (
+            f"{prompt}. Critical composition: zoom out further, keep the entire garment small enough to fit "
+            "comfortably inside the image, with at least 10 percent plain white empty space around the top, bottom, "
+            "left, and right edges. Both sleeves and cuffs must be fully visible and must not touch or leave the frame."
+        )
 
-            def _legacy_callback(step_index, _timestep, _latents):
-                _log_step(step_index + 1)
+    def _content_bbox(self, image: Image.Image) -> tuple[int, int, int, int] | None:
+        """Find non-white content bounds for catalog images on white backgrounds."""
 
-            return pipeline(
-                **pipe_kwargs,
-                callback=_legacy_callback,
-                callback_steps=max(1, log_interval),
-            )
+        rgb_image = image.convert("RGB")
+        white_background = Image.new("RGB", rgb_image.size, (255, 255, 255))
+        difference = ImageChops.difference(rgb_image, white_background).convert("L")
+        mask = difference.point(lambda value: 255 if value > 18 else 0)
+        return mask.getbbox()
+
+    def _margin_report(self, image: Image.Image) -> tuple[bool, str]:
+        """Return whether generated garment content has enough border margin."""
+
+        bbox = self._content_bbox(image)
+        if bbox is None:
+            return False, "no garment content detected"
+
+        width, height = image.size
+        left, top, right, bottom = bbox
+        margin_ratio = max(0.0, min(self.settings.cloth_min_border_margin_ratio, 0.25))
+        required_x = max(1, int(width * margin_ratio))
+        required_y = max(1, int(height * margin_ratio))
+        margins = {
+            "left": left,
+            "top": top,
+            "right": width - right,
+            "bottom": height - bottom,
+        }
+        failures = [
+            side
+            for side, margin in margins.items()
+            if margin < (required_x if side in {"left", "right"} else required_y)
+        ]
+        if failures:
+            margin_text = ", ".join(f"{side}={margin}" for side, margin in margins.items())
+            return False, f"content too close to {', '.join(failures)} edge(s); margins: {margin_text}"
+
+        return True, "content safely inside frame"
 
     def generate_clothes(
         self,
@@ -467,17 +164,15 @@ class ClothGeneratorService:
         category: str | None = None,
         negative_prompt: str | None = None,
         count: int = 1,
-        width: int = 768,
+        width: int = 1024,
         height: int = 1024,
-        guidance_scale: float = 7.0,
-        num_inference_steps: int = 30,
+        guidance_scale: float = 0.0,
+        num_inference_steps: int = 4,
         seed: int | None = None,
     ) -> list[ClothGenerationResultItem]:
-        """Generate standalone garment product images with Colab-quality defaults."""
+        """Generate standalone garment product images on Hugging Face."""
 
-        pipeline = self._load_pipeline()
-
-        tuned = self._tune_request_for_performance(
+        tuned = self._tune_request_for_provider(
             count=count,
             width=width,
             height=height,
@@ -487,18 +182,19 @@ class ClothGeneratorService:
         tuned_count, tuned_width, tuned_height, tuned_guidance, tuned_steps, notes = tuned
 
         if notes:
-            self.logger.warning("Performance tuning applied: %s", "; ".join(notes))
+            self.logger.warning("Generation tuning applied: %s", "; ".join(notes))
 
         enhanced_prompt = self._enhance_prompt(prompt, category=category)
         active_negative_prompt = negative_prompt or DEFAULT_NEGATIVE_PROMPT
+        client = self._build_client()
 
         results: list[ClothGenerationResultItem] = []
         base_seed = seed if seed is not None else random.randint(1, 2_000_000_000)
         request_started_at = time.monotonic()
         self.logger.info(
-            "Starting cloth generation: model=%s device=%s count=%d size=%dx%d steps=%d guidance=%.2f",
+            "Starting remote cloth generation: model=%s provider=%s count=%d size=%dx%d steps=%d guidance=%.2f",
             self.settings.cloth_model_id,
-            self.device,
+            self.settings.cloth_inference_provider,
             tuned_count,
             tuned_width,
             tuned_height,
@@ -508,34 +204,55 @@ class ClothGeneratorService:
 
         for idx in range(tuned_count):
             item_seed = base_seed + idx if seed is not None else random.randint(1, 2_000_000_000)
-            generator = self._build_generator(item_seed)
             image_started_at = time.monotonic()
             self.logger.info(
-                "Generating image %d/%d with seed=%d estimated_steps=%d",
+                "Generating remote image %d/%d with seed=%d",
                 idx + 1,
                 tuned_count,
                 item_seed,
-                tuned_steps,
             )
 
-            pipe_kwargs: dict[str, object] = {
-                "prompt": enhanced_prompt,
-                "width": tuned_width,
-                "height": tuned_height,
-                "guidance_scale": tuned_guidance,
-                "num_inference_steps": tuned_steps,
-                "generator": generator,
-            }
-            if tuned_guidance > 0.0:
-                pipe_kwargs["negative_prompt"] = active_negative_prompt
+            attempts = max(1, self.settings.cloth_max_generation_attempts)
+            image: Image.Image | None = None
+            accepted_attempt = 1
+            margin_report = "not checked"
+            for attempt_index in range(attempts):
+                attempt_seed = item_seed + attempt_index
+                attempt_prompt = self._build_attempt_prompt(enhanced_prompt, attempt_index)
+                try:
+                    candidate = client.text_to_image(
+                        attempt_prompt,
+                        negative_prompt=active_negative_prompt,
+                        height=tuned_height,
+                        width=tuned_width,
+                        num_inference_steps=tuned_steps,
+                        guidance_scale=tuned_guidance,
+                        model=self.settings.cloth_model_id,
+                        seed=attempt_seed,
+                    )
+                except Exception as error:
+                    raise ClothGenerationError(
+                        "Hugging Face remote cloth generation failed. Confirm HF_TOKEN is valid, "
+                        "the selected provider is enabled, and the model is accessible.\n"
+                        f"Provider: {self.settings.cloth_inference_provider}\n"
+                        f"Model: {self.settings.cloth_model_id}\n"
+                        f"Original error: {error}"
+                    ) from error
 
-            image = self._run_pipeline_with_progress(
-                pipeline=pipeline,
-                pipe_kwargs=pipe_kwargs,
-                image_index=idx + 1,
-                total_images=tuned_count,
-                total_steps=tuned_steps,
-            ).images[0]
+                image = candidate
+                accepted_attempt = attempt_index + 1
+                is_safe, margin_report = self._margin_report(candidate)
+                if is_safe:
+                    break
+                self.logger.warning(
+                    "Generated garment appears cropped on attempt %d/%d: %s",
+                    accepted_attempt,
+                    attempts,
+                    margin_report,
+                )
+
+            if image is None:
+                raise ClothGenerationError("Hugging Face remote cloth generation returned no image.")
 
             output_path = self.storage.build_output_path(
                 subfolder="generated_clothes",
@@ -544,7 +261,7 @@ class ClothGeneratorService:
             )
             save_image(image, output_path)
             self.logger.info(
-                "Completed image %d/%d in %.1fs -> %s",
+                "Completed remote image %d/%d in %.1fs -> %s",
                 idx + 1,
                 tuned_count,
                 time.monotonic() - image_started_at,
@@ -563,9 +280,12 @@ class ClothGeneratorService:
                         "height": tuned_height,
                         "guidance_scale": tuned_guidance,
                         "num_inference_steps": tuned_steps,
-                        "device": self.device,
+                        "provider": self.settings.cloth_inference_provider,
+                        "device": "huggingface",
                         "model_id": self.settings.cloth_model_id,
                         "performance_notes": " | ".join(notes) if notes else "none",
+                        "crop_check": margin_report,
+                        "generation_attempts": accepted_attempt,
                         "image_index": idx + 1,
                         "total_images": tuned_count,
                         "generation_seconds": round(time.monotonic() - image_started_at, 3),
@@ -575,10 +295,7 @@ class ClothGeneratorService:
             )
 
         self.logger.info(
-            "Cloth generation request completed in %.1fs",
+            "Remote cloth generation request completed in %.1fs",
             time.monotonic() - request_started_at,
         )
-        if self.settings.cloth_unload_after_request:
-            del pipeline
-            self._clear_accelerator_cache()
         return results

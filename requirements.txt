@@ -11,6 +11,7 @@ transformers
 accelerate
 safetensors
 huggingface_hub
+gradio_client
 opencv-python
 numpy
 requests

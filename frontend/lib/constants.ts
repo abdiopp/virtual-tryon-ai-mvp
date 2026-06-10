@@ -5,15 +5,15 @@ export const garmentCategories = [
 ] as const;
 
 export const defaultGenerationForm = {
-  prompt: "premium oversized black hoodie with minimal logo, studio product photography",
+  prompt: "oversized black hoodie with minimal logo",
   category: "hoodie",
   negative_prompt:
-    "low quality, blurry, distorted, deformed clothing, watermark, text, logo artifacts",
+    "low quality, blurry, distorted, cropped garment, close-up fabric, partial clothing, cut off edges, watermark, text, logo artifacts",
   count: 1,
-  width: 768,
+  width: 1024,
   height: 1024,
-  guidance_scale: 7,
-  num_inference_steps: 30,
+  guidance_scale: 0,
+  num_inference_steps: 4,
   seed: undefined
 };
 

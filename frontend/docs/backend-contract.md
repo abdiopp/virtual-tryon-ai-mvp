@@ -52,10 +52,10 @@ Request:
   "category": "hoodie",
   "negative_prompt": "low quality, blurry",
   "count": 1,
-  "width": 768,
+  "width": 1024,
   "height": 1024,
-  "guidance_scale": 7,
-  "num_inference_steps": 30,
+  "guidance_scale": 0,
+  "num_inference_steps": 4,
   "seed": 123
 }
 ```
@@ -73,12 +73,12 @@ Response:
       "seed": 123,
       "metadata": {
         "category": "hoodie",
-        "width": 768,
+        "width": 1024,
         "height": 1024,
-        "guidance_scale": 7,
-        "num_inference_steps": 30,
+        "guidance_scale": 0,
+        "num_inference_steps": 4,
         "device": "cpu",
-        "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
+        "model_id": "black-forest-labs/FLUX.1-schnell",
         "performance_notes": "none",
         "image_index": 1,
         "total_images": 1,
@@ -105,11 +105,13 @@ Response:
   "success": true,
   "result_path": "/abs/path/outputs/tryon_results/tryon_result_abc123.png",
   "metadata": {
-    "category": "tops",
+    "category": "upper_body",
     "source_person": "/abs/path/uploads/persons/person_abc.png",
     "source_garment": "/abs/path/uploads/garments/garment_xyz.png",
-    "tryon_backend": "leffa",
-    "runtime_device": "cpu",
+    "tryon_backend": "huggingface_space",
+    "space_id": "yisol/IDM-VTON",
+    "space_api_name": "/tryon",
+    "runtime_device": "huggingface",
     "generation_seconds": 12.345,
     "request_seconds": 12.345
   }
@@ -154,20 +156,21 @@ Response is identical to the upload flow.
 
 ### Cloth generation
 
-- Uses a Diffusers text-to-image pipeline.
-- Default model: `stabilityai/stable-diffusion-xl-base-1.0`.
+- Uses Hugging Face Inference Providers through `huggingface_hub.InferenceClient`.
+- Default model: `black-forest-labs/FLUX.1-schnell`.
 - `count` is clamped to `1..8`.
-- On non-CUDA devices, the backend may reduce count, steps, and resolution for performance.
-- If the model is SDXL-like, the backend enforces extra quality guardrails for width, height, steps, and guidance.
-- For turbo models, guidance is forced to `0.0`.
-- By default, the backend releases the cloth pipeline after generation so try-on has more GPU memory.
+- Default provider: `nscale`.
+- `HF_TOKEN` is required for hosted cloth generation.
+- If the model is Flux Schnell, the backend uses 4 steps and guidance `0.0`.
 - A prompt enhancement template can rewrite the user prompt into a product-photo prompt.
+- Generated garment images are checked for border margin; if content appears cropped or touches the edge, the backend retries with a stricter zoomed-out prompt before saving.
 
 ### Try-on
 
-- Categories are normalized by the configured backend. Leffa returns `upper_body`, `lower_body`, or `dresses`; FASHN returns `tops`, `bottoms`, or `one-pieces`.
-- The configured try-on repository and required weights must exist before inference can run. The default backend is Leffa; FASHN remains available through `TRYON_BACKEND=fashn_vton`.
-- The backend streams progress logs while the subprocess runs, but it does not expose live progress in the HTTP response.
+- The default backend is `huggingface_space`, which calls `yisol/IDM-VTON` through the Gradio API and copies the returned image into `outputs/tryon_results/`.
+- The default try-on backend does not require local try-on repositories, weights, CUDA, or Colab.
+- Optional local backends remain available with `TRYON_BACKEND=leffa` or `TRYON_BACKEND=fashn_vton`; those local backends require their configured repositories and weights.
+- The backend logs request start/end and remote call timing, but it does not expose live progress in the HTTP response.
 
 ## Frontend Integration Notes
 

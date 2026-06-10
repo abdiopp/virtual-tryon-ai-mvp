@@ -7,10 +7,10 @@
   "prompt": "oversized black hoodie with minimal logo",
   "category": "hoodie",
   "count": 1,
-  "width": 768,
+  "width": 1024,
   "height": 1024,
-  "guidance_scale": 7.0,
-  "num_inference_steps": 30,
+  "guidance_scale": 0.0,
+  "num_inference_steps": 4,
   "seed": 123
 }
 ```

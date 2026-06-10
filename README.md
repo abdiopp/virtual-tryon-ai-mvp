@@ -1,24 +1,24 @@
 # virtual-tryon-ai-mvp
 
-A two-stage virtual try-on backend now tuned for Google Colab GPU demos, while still keeping CPU/MPS fallback behavior for local development:
+A two-stage virtual try-on backend that runs both generated garment images and virtual try-on on Hugging Face by default:
 
-1. Cloth generation: `stabilityai/stable-diffusion-xl-base-1.0` through Diffusers
-2. Virtual try-on: `Leffa` backend wrapper at quality-focused Colab settings
+1. Cloth generation: `black-forest-labs/FLUX.1-schnell` through Hugging Face Inference Providers (`nscale`)
+2. Virtual try-on: `yisol/IDM-VTON` through the Hugging Face Space Gradio API
 
-This setup is designed for Colab CUDA first. On local machines, `DEVICE=auto` falls back to Apple Silicon MPS or CPU when CUDA is not available.
+Both model workloads run on Hugging Face, not your device or Google Colab.
 
 ## Why This Version
 
-- Uses better default models and settings now that the target runtime is Colab.
-- Keeps non-CUDA guardrails so local CPU/MPS requests are still bounded.
+- Uses the public IDM-VTON Hugging Face Space for try-on inference.
+- Uses hosted Flux Schnell generation for complete garment catalog images.
 - Keeps modular FastAPI architecture for future backend integration.
 
 ## Architecture
 
 - `app/routes/*`: API endpoints
-- `app/services/cloth_generator.py`: Diffusers cloth generation service
-- `app/services/tryon_service.py`: Leffa/FASHN try-on backend wrappers
-- `scripts/download_models.py`: downloads cloth model + configured try-on backend assets
+- `app/services/cloth_generator.py`: Hugging Face Inference Provider cloth generation service
+- `app/services/tryon_service.py`: Hugging Face Space, Leffa, and FASHN try-on backend wrappers
+- `scripts/download_models.py`: downloads optional local try-on backend assets
 
 ## Frontend
 
@@ -62,8 +62,15 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process RemoteS
 
 Main keys from `.env.example`:
 
-- `CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0`
-- `TRYON_BACKEND=leffa`
+- `CLOTH_MODEL_ID=black-forest-labs/FLUX.1-schnell`
+- `CLOTH_INFERENCE_PROVIDER=nscale`
+- `TRYON_BACKEND=huggingface_space`
+- `TRYON_SPACE_ID=yisol/IDM-VTON`
+- `TRYON_SPACE_API_NAME=/tryon`
+- `TRYON_SPACE_DENOISE_STEPS=30`
+- `TRYON_SPACE_SEED=42`
+- `TRYON_SPACE_AUTO_MASK=true`
+- `TRYON_SPACE_AUTO_CROP=false`
 - `LEFFA_MODEL_DIR=models/leffa`
 - `LEFFA_CHECKPOINT_DIR=models/leffa_ckpts`
 - `LEFFA_NUM_INFERENCE_STEPS=30`
@@ -76,39 +83,23 @@ Main keys from `.env.example`:
 - `FASHN_WEIGHTS_DIR=models/fashn_weights`
 - `FASHN_NUM_TIMESTEPS=30`
 - `FASHN_GUIDANCE_SCALE=1.5`
-- `DEVICE=auto` to use CUDA, then MPS, then CPU
-- `DEVICE=cpu` to force local CPU
-- `DEVICE=mps` to force Apple Silicon
-- `NON_CUDA_FORCE_FAST_LIMITS=true` to auto-cap heavy requests
-- `CLOTH_UNLOAD_AFTER_REQUEST=true` to free SDXL GPU memory before try-on
-- `CLOTH_ENABLE_MODEL_CPU_OFFLOAD=true` if Colab GPU VRAM is tight
+- `HF_TOKEN=<your token>` is required for hosted cloth generation
 
-Backward compatibility aliases are supported:
+Backward compatibility alias supported:
 
 - `SDXL_MODEL_ID` -> `CLOTH_MODEL_ID`
-- `SDXL_LORA_PATH` -> `CLOTH_LORA_PATH`
 
 ## Download Models
 
-Download both cloth + try-on assets:
+The default setup does not need local cloth or try-on model downloads. Set `HF_TOKEN` so the backend can call the Hugging Face Inference Provider. Flux model access may require signing in to Hugging Face and accepting the model conditions for `black-forest-labs/FLUX.1-schnell`.
+
+Download optional local Leffa try-on assets only if you set `TRYON_BACKEND=leffa`:
 
 ```bash
-python scripts/download_models.py
+python scripts/download_models.py --only-tryon --tryon-backend leffa
 ```
 
-Download only cloth model:
-
-```bash
-python scripts/download_models.py --only-clothes
-```
-
-Download only try-on assets:
-
-```bash
-python scripts/download_models.py --only-tryon
-```
-
-Download the legacy FASHN backend instead:
+Download optional local FASHN assets only if you set `TRYON_BACKEND=fashn_vton`:
 
 ```bash
 python scripts/download_models.py --only-tryon --tryon-backend fashn_vton
@@ -152,20 +143,20 @@ curl -X POST http://localhost:8000/generate-clothes \
     "prompt": "oversized black hoodie with minimal logo",
     "category": "hoodie",
     "count": 1,
-    "width": 768,
+    "width": 1024,
     "height": 1024,
-    "guidance_scale": 7.0,
-    "num_inference_steps": 30,
+    "guidance_scale": 0.0,
+    "num_inference_steps": 4,
     "seed": 123
   }'
 ```
 
-For public tunnels or slow SDXL runs, prefer the async job endpoint so the proxy does not time out:
+For public tunnels or slow image generation runs, prefer the async job endpoint so the proxy does not time out:
 
 ```bash
 curl -X POST http://localhost:8000/generate-clothes-jobs \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"oversized black hoodie with minimal logo","category":"hoodie","count":1,"width":768,"height":1024,"guidance_scale":7.0,"num_inference_steps":30}'
+  -d '{"prompt":"oversized black hoodie with minimal logo","category":"hoodie","count":1,"width":1024,"height":1024,"guidance_scale":0.0,"num_inference_steps":4}'
 
 curl http://localhost:8000/generate-clothes-jobs/<job_id>
 ```
@@ -190,10 +181,10 @@ Generate clothes:
 python scripts/generate_clothes_cli.py \
   --prompt "black oversized hoodie streetwear" \
   --count 1 \
-  --width 768 \
+  --width 1024 \
   --height 1024 \
-  --num-inference-steps 30 \
-  --guidance-scale 7.0
+  --num-inference-steps 4 \
+  --guidance-scale 0.0
 ```
 
 Try-on:
@@ -207,14 +198,11 @@ python scripts/virtual_tryon_cli.py \
 
 ## Performance Guidance
 
-- Colab GPU: keep `DEVICE=auto`, `count=1`, `768x1024`, and 30 inference steps for quality.
-- Leffa try-on is GPU-first; use Colab CUDA for practical inference speed.
-- Intel integrated graphics: set `DEVICE=cpu`.
-- Apple Silicon: set `DEVICE=mps`.
-- Local non-CUDA iteration: use smaller requests such as `512x768` and `num_inference_steps=14`.
-- Non-CUDA fast caps are auto-applied when `NON_CUDA_FORCE_FAST_LIMITS=true`.
+- Cloth generation runs on Hugging Face Inference Providers, so local CUDA is not required for `/generate-clothes`.
+- Try-on inference runs on the configured Hugging Face Space, so local CUDA is not required for `/virtual-tryon`.
+- For Flux Schnell, keep `1024x1024`, 4 inference steps, and `guidance_scale=0.0`.
 
 ## Notes
 
-- This MVP is optimized for Colab CUDA, with bounded local fallbacks for development.
-- The API logs request start/end, progress, elapsed time, and ETA-style heartbeats for both cloth generation and virtual try-on so long-running calls are easier to monitor.
+- This MVP is optimized to keep model inference off your machine by using Hugging Face-hosted services.
+- The API logs request start/end and elapsed time so long-running remote calls are easier to monitor.

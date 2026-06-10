@@ -108,13 +108,13 @@ export function DashboardScreen() {
             label="Generation model"
             value={health?.models.cloth_generator ?? "missing"}
             tone={generatorAvailable ? "success" : "warning"}
-            hint="Reports whether the cloth-generation model is locally available."
+            hint="Reports whether hosted cloth generation is configured."
           />
           <StatCard
             label="Try-on model"
             value={health?.models.tryon_model ?? "missing"}
             tone={tryonAvailable ? "success" : "warning"}
-            hint="Reports whether the configured try-on backend assets are available locally."
+            hint="Reports whether the configured try-on backend is ready."
           />
         </div>
       </div>
@@ -138,7 +138,7 @@ export function DashboardScreen() {
             <div className="rounded-2xl border border-border bg-background/80 p-4">
               <p className="text-sm font-semibold">Try-on categories</p>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                The service normalizes category values into {`tops`}, {`bottoms`}, and {`one-pieces`}.
+                The service normalizes category values before sending requests to the configured try-on backend.
               </p>
             </div>
             <div className="rounded-2xl border border-border bg-background/80 p-4">

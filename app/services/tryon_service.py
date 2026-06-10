@@ -14,6 +14,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.storage_service import StorageService
@@ -53,6 +54,11 @@ LEFFA_CATEGORY_MAP = {
 SUPPORTED_TRYON_BACKENDS = {
     "fashn": "fashn_vton",
     "fashn_vton": "fashn_vton",
+    "hf": "huggingface_space",
+    "hf_space": "huggingface_space",
+    "huggingface": "huggingface_space",
+    "huggingface_space": "huggingface_space",
+    "idm_vton": "huggingface_space",
     "leffa": "leffa",
 }
 
@@ -233,6 +239,139 @@ class VirtualTryOnResult:
 
     result_path: str
     metadata: dict[str, str | int | float]
+
+
+class HuggingFaceSpaceTryOnService:
+    """Service that calls the IDM-VTON Hugging Face Space through Gradio."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self.storage = StorageService(self.settings)
+        self.logger = get_logger(__name__)
+
+    def is_model_available(self) -> bool:
+        """Remote Space backend does not require local model files."""
+
+        return bool(self.settings.tryon_space_id and self.settings.tryon_space_api_name)
+
+    def _normalize_category(self, category: str) -> str:
+        normalized = category.strip().lower()
+        if normalized not in LEFFA_CATEGORY_MAP:
+            raise ValueError("Invalid category. Use one of: upper_body, lower_body, dress.")
+        return LEFFA_CATEGORY_MAP[normalized]
+
+    def _build_garment_description(self, normalized_category: str) -> str:
+        descriptions = {
+            "upper_body": "upper body garment",
+            "lower_body": "lower body garment",
+            "dresses": "dress",
+        }
+        return descriptions.get(normalized_category, "garment")
+
+    def _extract_output_path(self, result: Any) -> Path:
+        """Return the first image path from the Gradio result payload."""
+
+        first_result = result[0] if isinstance(result, (tuple, list)) and result else result
+        if isinstance(first_result, dict):
+            first_result = first_result.get("path") or first_result.get("name")
+        if not first_result:
+            raise TryOnSetupError(f"Hugging Face Space returned no output image: {result!r}")
+
+        path = Path(str(first_result))
+        if not path.exists() or not path.is_file():
+            raise TryOnSetupError(f"Hugging Face Space output image was not downloaded: {path}")
+        return path
+
+    def run_tryon(
+        self,
+        person_image_path: Path | str,
+        garment_image_path: Path | str,
+        category: str = "upper_body",
+        output_path: Path | None = None,
+    ) -> VirtualTryOnResult:
+        """Run try-on on Hugging Face and copy the returned image locally."""
+
+        try:
+            from gradio_client import Client, file
+        except ImportError as error:
+            raise TryOnSetupError(
+                "gradio_client is required for TRYON_BACKEND=huggingface_space. "
+                "Install it with `pip install gradio_client` or `pip install -r requirements.txt`."
+            ) from error
+
+        person_path = ensure_image_exists(person_image_path)
+        garment_path = ensure_image_exists(garment_image_path)
+        normalized_category = self._normalize_category(category)
+        target_output_path = output_path or self.storage.build_output_path(
+            subfolder="tryon_results",
+            prefix="tryon_result",
+            extension=".png",
+        )
+        target_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        request_started_at = time.monotonic()
+        self.logger.info(
+            "Hugging Face Space try-on request: space=%s api=%s category=%s person=%s garment=%s",
+            self.settings.tryon_space_id,
+            self.settings.tryon_space_api_name,
+            normalized_category,
+            person_path,
+            garment_path,
+        )
+
+        try:
+            client = Client(
+                self.settings.tryon_space_id,
+                token=self.settings.hf_token,
+                verbose=False,
+                download_files=target_output_path.parent,
+            )
+            result = client.predict(
+                dict={
+                    "background": file(str(person_path)),
+                    "layers": [],
+                    "composite": None,
+                },
+                garm_img=file(str(garment_path)),
+                garment_des=self._build_garment_description(normalized_category),
+                is_checked=self.settings.tryon_space_auto_mask,
+                is_checked_crop=self.settings.tryon_space_auto_crop,
+                denoise_steps=self.settings.tryon_space_denoise_steps,
+                seed=self.settings.tryon_space_seed,
+                api_name=self.settings.tryon_space_api_name,
+            )
+        except Exception as error:
+            raise TryOnSetupError(
+                "Hugging Face Space try-on failed. Confirm the Space is available and HF_TOKEN is set "
+                "if the Space is private.\n"
+                f"Space: {self.settings.tryon_space_id}\n"
+                f"API: {self.settings.tryon_space_api_name}\n"
+                f"Original error: {error}"
+            ) from error
+
+        downloaded_output_path = self._extract_output_path(result)
+        if downloaded_output_path.resolve() != target_output_path.resolve():
+            shutil.copy2(downloaded_output_path, target_output_path)
+
+        elapsed_seconds = time.monotonic() - request_started_at
+        self.logger.info("Hugging Face Space try-on output saved to %s in %.1fs", target_output_path, elapsed_seconds)
+
+        return VirtualTryOnResult(
+            result_path=str(target_output_path),
+            metadata={
+                "category": normalized_category,
+                "source_person": str(person_path),
+                "source_garment": str(garment_path),
+                "tryon_backend": "huggingface_space",
+                "space_id": self.settings.tryon_space_id,
+                "space_api_name": self.settings.tryon_space_api_name,
+                "denoise_steps": self.settings.tryon_space_denoise_steps,
+                "seed": self.settings.tryon_space_seed,
+                "runtime_device": "huggingface",
+                "generation_seconds": round(elapsed_seconds, 3),
+                "request_seconds": round(elapsed_seconds, 3),
+            },
+        )
 
 
 class LeffaTryOnService:
@@ -854,11 +993,15 @@ class FashnTryOnService:
         )
 
 
-def get_tryon_service(settings: Settings | None = None) -> LeffaTryOnService | FashnTryOnService:
+def get_tryon_service(
+    settings: Settings | None = None,
+) -> HuggingFaceSpaceTryOnService | LeffaTryOnService | FashnTryOnService:
     """Return the configured virtual try-on backend service."""
 
     resolved_settings = settings or get_settings()
     backend = normalize_tryon_backend(resolved_settings.tryon_backend)
+    if backend == "huggingface_space":
+        return HuggingFaceSpaceTryOnService(resolved_settings)
     if backend == "leffa":
         return LeffaTryOnService(resolved_settings)
     if backend == "fashn_vton":

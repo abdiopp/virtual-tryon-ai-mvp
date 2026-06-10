@@ -24,24 +24,20 @@ class Settings(BaseSettings):
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
 
     cloth_model_id: str = Field(
-        default="stabilityai/stable-diffusion-xl-base-1.0",
+        default="black-forest-labs/FLUX.1-schnell",
         validation_alias=AliasChoices("CLOTH_MODEL_ID", "SDXL_MODEL_ID"),
     )
-    cloth_lora_path: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("CLOTH_LORA_PATH", "SDXL_LORA_PATH"),
-    )
-    cloth_local_files_only: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("CLOTH_LOCAL_FILES_ONLY", "SDXL_LOCAL_FILES_ONLY"),
-    )
-    cloth_enable_model_cpu_offload: bool = Field(
-        default=False,
-        alias="CLOTH_ENABLE_MODEL_CPU_OFFLOAD",
-    )
-    cloth_unload_after_request: bool = Field(default=True, alias="CLOTH_UNLOAD_AFTER_REQUEST")
+    cloth_inference_provider: str = Field(default="nscale", alias="CLOTH_INFERENCE_PROVIDER")
+    cloth_max_generation_attempts: int = Field(default=3, alias="CLOTH_MAX_GENERATION_ATTEMPTS")
+    cloth_min_border_margin_ratio: float = Field(default=0.08, alias="CLOTH_MIN_BORDER_MARGIN_RATIO")
 
-    tryon_backend: str = Field(default="leffa", alias="TRYON_BACKEND")
+    tryon_backend: str = Field(default="huggingface_space", alias="TRYON_BACKEND")
+    tryon_space_id: str = Field(default="yisol/IDM-VTON", alias="TRYON_SPACE_ID")
+    tryon_space_api_name: str = Field(default="/tryon", alias="TRYON_SPACE_API_NAME")
+    tryon_space_denoise_steps: int = Field(default=30, alias="TRYON_SPACE_DENOISE_STEPS")
+    tryon_space_seed: int = Field(default=42, alias="TRYON_SPACE_SEED")
+    tryon_space_auto_mask: bool = Field(default=True, alias="TRYON_SPACE_AUTO_MASK")
+    tryon_space_auto_crop: bool = Field(default=False, alias="TRYON_SPACE_AUTO_CROP")
     leffa_repo_url: str = Field(
         default="https://github.com/franciszzj/Leffa.git",
         alias="LEFFA_REPO_URL",
@@ -72,27 +68,28 @@ class Settings(BaseSettings):
     fashn_garment_photo_type: str = Field(default="flat-lay", alias="FASHN_GARMENT_PHOTO_TYPE")
     fashn_fallback_to_cpu_on_oom: bool = Field(default=True, alias="FASHN_FALLBACK_TO_CPU_ON_OOM")
 
-    model_cache_dir: Path = Field(default=Path("models/huggingface"), alias="MODEL_CACHE_DIR")
     output_dir: Path = Field(default=Path("outputs"), alias="OUTPUT_DIR")
     upload_dir: Path = Field(default=Path("uploads"), alias="UPLOAD_DIR")
 
     device: str = Field(default="auto", alias="DEVICE")
     mps_use_fp16: bool = Field(default=False, alias="MPS_USE_FP16")
 
-    default_image_width: int = Field(default=768, alias="DEFAULT_IMAGE_WIDTH")
+    default_image_width: int = Field(default=1024, alias="DEFAULT_IMAGE_WIDTH")
     default_image_height: int = Field(default=1024, alias="DEFAULT_IMAGE_HEIGHT")
 
     non_cuda_force_fast_limits: bool = Field(default=True, alias="NON_CUDA_FORCE_FAST_LIMITS")
     non_cuda_max_count: int = Field(default=2, alias="NON_CUDA_MAX_COUNT")
     non_cuda_max_steps: int = Field(default=6, alias="NON_CUDA_MAX_STEPS")
-    non_cuda_max_pixels: int = Field(default=393216, alias="NON_CUDA_MAX_PIXELS")
+    non_cuda_max_pixels: int = Field(default=1048576, alias="NON_CUDA_MAX_PIXELS")
 
     prompt_enhancement_enabled: bool = Field(default=True, alias="PROMPT_ENHANCEMENT_ENABLED")
     prompt_enhancement_template: str = Field(
         default=(
-            "front view high-end ecommerce product photo of a {prompt}, isolated {category}, "
-            "clean white background, realistic fabric texture, natural seams and stitching, "
-            "symmetrical silhouette, high detail, no person, no mannequin"
+            "clean ecommerce catalog image of one complete {prompt}, {category}, entire garment fully visible "
+            "from top to bottom with both sleeves, cuffs, hem, collar, hood, and all edges fully inside the frame, "
+            "centered with generous white margin on every side, zoomed-out product photo, sleeves hanging naturally "
+            "downward close to the body, plain white background, realistic fabric texture, balanced lighting, no person, "
+            "no mannequin, no hanger, no body parts, not cropped, no close-up, no edge touching the image border"
         ),
         alias="PROMPT_ENHANCEMENT_TEMPLATE",
     )
@@ -119,7 +116,6 @@ class Settings(BaseSettings):
     def ensure_directories(self) -> None:
         """Ensure required local directories exist."""
 
-        self.model_cache_dir = self._resolve_project_path(self.model_cache_dir)
         self.output_dir = self._resolve_project_path(self.output_dir)
         self.upload_dir = self._resolve_project_path(self.upload_dir)
         self.leffa_model_dir = self._resolve_project_path(self.leffa_model_dir)
@@ -135,7 +131,6 @@ class Settings(BaseSettings):
         for directory in [
             self.output_dir,
             self.upload_dir,
-            self.model_cache_dir,
             generated_dir,
             tryon_dir,
             persons_dir,

@@ -41,7 +41,7 @@ export function GenerateForm() {
   const helperNotes = useMemo(
     () => [
       "The backend caps count at 8.",
-      "Colab GPU defaults use SDXL at 768x1024 with 30 steps.",
+      "Flux defaults use 1024x1024 with 4 steps.",
       "Non-CUDA devices may auto-adjust size, steps, and count."
     ],
     []
@@ -56,7 +56,7 @@ export function GenerateForm() {
           </Badge>
           <CardTitle className="font-display text-2xl">Generate clothing assets</CardTitle>
           <CardDescription>
-            Configure the existing SDXL-based backend with a polished interface and inline validation.
+            Generate complete catalog-style garment images with the Flux backend.
           </CardDescription>
         </CardHeader>
         <CardContent>

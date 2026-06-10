@@ -1,4 +1,4 @@
-"""Download and prepare cloth generation + try-on assets for Colab/local usage."""
+"""Download optional local try-on assets."""
 
 from __future__ import annotations
 
@@ -25,39 +25,6 @@ from app.utils.logging_utils import configure_logging, get_logger
 
 configure_logging()
 logger = get_logger(__name__)
-
-CLOTH_ALLOW_PATTERNS = [
-    "model_index.json",
-    "scheduler/*",
-    "tokenizer/*",
-    "tokenizer_2/*",
-    "text_encoder/*",
-    "text_encoder_2/*",
-    "unet/*",
-    "vae/*",
-    "feature_extractor/*",
-    "safety_checker/*",
-]
-
-CLOTH_REQUIRED_FILES = [
-    "model_index.json",
-    "scheduler",
-    "tokenizer",
-    "unet/config.json",
-]
-
-CLOTH_WEIGHT_CANDIDATES = [
-    "unet/diffusion_pytorch_model.fp16.safetensors",
-    "unet/diffusion_pytorch_model.safetensors",
-]
-
-CLOTH_IGNORE_PATTERNS = [
-    "*/model.onnx",
-    "*/model.onnx_data",
-    "*/openvino_model.bin",
-    "*/openvino_model.xml",
-    "*/diffusion_flax_model.msgpack",
-]
 
 LEFFA_ALLOW_PATTERNS = [
     "densepose/*",
@@ -88,16 +55,16 @@ LEFFA_REQUIRED_FILES = [
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description="Download cloth generation and virtual try-on assets.")
+    parser = argparse.ArgumentParser(description="Download optional local virtual try-on assets.")
     parser.add_argument(
         "--full-clothes-download",
         action="store_true",
-        help="Download full cloth model repository including non-Diffusers artifacts.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--only-clothes",
         action="store_true",
-        help="Download cloth model only.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--only-sdxl",
@@ -107,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--only-tryon",
         action="store_true",
-        help="Download configured try-on backend repo + weights only.",
+        help="Download configured local try-on backend repo + weights only.",
     )
     parser.add_argument(
         "--tryon-backend",
@@ -198,37 +165,6 @@ def start_progress_logger(cache_dir: Path, stop_event: threading.Event, interval
     return thread
 
 
-def validate_cloth_snapshot(snapshot_path: Path) -> None:
-    """Validate minimum required files for diffusers text-to-image inference."""
-
-    must_exist = [snapshot_path / relative for relative in CLOTH_REQUIRED_FILES]
-    missing = [path for path in must_exist if not path.exists()]
-    if missing:
-        joined = "\n".join(f"- {path}" for path in missing)
-        raise RuntimeError(
-            "Cloth model download completed but required files are missing:\n"
-            f"{joined}\n"
-            "Retry `python scripts/download_models.py --only-clothes` to resume/repair cache."
-        )
-
-    unet_candidates = [snapshot_path / relative for relative in CLOTH_WEIGHT_CANDIDATES]
-    if not any(path.exists() for path in unet_candidates):
-        raise RuntimeError(
-            "Could not find UNet weights in cloth model snapshot. "
-            f"Expected one of: {[str(path) for path in unet_candidates]}"
-        )
-
-
-def cloth_snapshot_is_complete(snapshot_path: Path) -> bool:
-    """Return whether a cloth snapshot contains the files needed to load locally."""
-
-    try:
-        validate_cloth_snapshot(snapshot_path)
-    except RuntimeError:
-        return False
-    return True
-
-
 def validate_tryon_assets(fashn_repo_dir: Path, fashn_weights_dir: Path) -> None:
     """Validate that required FASHN repo files and weights are present."""
 
@@ -297,85 +233,6 @@ def hf_token_for_hub(hf_token: str | None) -> str | bool:
     if normalized:
         return normalized
     return False
-
-
-def download_cloth_model(
-    model_id: str,
-    cache_dir: Path,
-    hf_token: str | bool,
-    full_download: bool,
-    max_workers: int,
-    progress_interval: int,
-) -> Path:
-    """Download the configured cloth model to cache."""
-
-    local_model_dir = Path(model_id)
-    if local_model_dir.exists():
-        model_index = local_model_dir / "model_index.json"
-        if not model_index.exists():
-            raise RuntimeError(
-                f"CLOTH_MODEL_ID points to local path but `model_index.json` is missing: {model_index}"
-            )
-        validate_cloth_snapshot(local_model_dir)
-        logger.info("Using existing local cloth model directory: %s", local_model_dir.resolve())
-        return local_model_dir.resolve()
-
-    logger.info("Cloth model ID: %s", model_id)
-    logger.info("Cloth model cache: %s", cache_dir.resolve())
-    logger.info("Resume behavior: partial files are reused automatically.")
-
-    stop_event = threading.Event()
-    thread = start_progress_logger(cache_dir=cache_dir, stop_event=stop_event, interval_seconds=max(5, progress_interval))
-    started_at = time.time()
-
-    try:
-        snapshot_path = snapshot_download(
-            repo_id=model_id,
-            cache_dir=str(cache_dir),
-            token=hf_token,
-            allow_patterns=None if full_download else CLOTH_ALLOW_PATTERNS,
-            ignore_patterns=None if full_download else CLOTH_IGNORE_PATTERNS,
-            max_workers=max_workers,
-        )
-        resolved = Path(snapshot_path)
-        if not cloth_snapshot_is_complete(resolved) and not full_download:
-            logger.warning(
-                "Cloth snapshot is still incomplete after the minimal download pass; retrying with full download patterns."
-            )
-            snapshot_path = snapshot_download(
-                repo_id=model_id,
-                cache_dir=str(cache_dir),
-                token=hf_token,
-                allow_patterns=None,
-                ignore_patterns=None,
-                max_workers=max_workers,
-            )
-    except GatedRepoError as error:
-        raise RuntimeError(
-            "Access denied to gated Hugging Face model. Accept model terms and set HF_TOKEN.\n"
-            f"Model: {model_id}\nOriginal error: {error}"
-        ) from error
-    except RepositoryNotFoundError as error:
-        raise RuntimeError(
-            f"Model repository not found: {model_id}. Check CLOTH_MODEL_ID in .env."
-        ) from error
-    except HfHubHTTPError as error:
-        status_code = getattr(error.response, "status_code", "unknown")
-        raise RuntimeError(
-            "Hugging Face HTTP error while downloading cloth model.\n"
-            f"Model: {model_id}\nHTTP status: {status_code}\nOriginal error: {error}"
-        ) from error
-    finally:
-        stop_event.set()
-        thread.join(timeout=1.0)
-
-    elapsed = time.time() - started_at
-    resolved = Path(snapshot_path)
-    validate_cloth_snapshot(resolved)
-    logger.info("Cloth snapshot validated at: %s", resolved)
-    logger.info("Cloth download elapsed: %.1f seconds", elapsed)
-    logger.info("Final cache size: %s", format_bytes(directory_size_bytes(cache_dir)))
-    return resolved
 
 
 def clone_repo(repo_url: str, destination: Path) -> None:
@@ -532,6 +389,13 @@ def main() -> int:
         else normalize_tryon_backend(args.tryon_backend or settings.tryon_backend)
     )
 
+    if args.only_clothes or args.full_clothes_download:
+        logger.info(
+            "Local cloth model downloads are no longer used. "
+            "Cloth generation runs through Hugging Face Inference Providers."
+        )
+        return 0
+
     logger.info(
         "Download options: full_clothes=%s only_clothes=%s only_tryon=%s tryon_backend=%s max_workers=%d interval=%ss",
         args.full_clothes_download,
@@ -558,51 +422,43 @@ def main() -> int:
         logger.warning("HF_TOKEN is not set. Anonymous download will be attempted.")
         logger.info("Hugging Face auth mode: anonymous (token=False).")
 
-    run_clothes = not args.only_tryon
-    run_tryon = not args.only_clothes
+    run_tryon = tryon_backend in {"leffa", "fashn_vton"}
 
-    if not run_clothes and not run_tryon:
-        raise RuntimeError("No download target selected. Remove conflicting flags and retry.")
+    if not run_tryon:
+        logger.info(
+            "No local model downloads are required for the hosted backend: %s",
+            tryon_backend,
+        )
+        return 0
 
-    if run_clothes:
-        download_cloth_model(
-            model_id=settings.cloth_model_id,
-            cache_dir=settings.model_cache_dir,
+    if tryon_backend == "leffa":
+        clone_repo(settings.leffa_repo_url, settings.leffa_model_dir)
+        download_leffa_checkpoints(
+            repo_id=settings.leffa_hf_repo_id,
+            leffa_repo_dir=settings.leffa_model_dir,
+            checkpoint_dir=settings.leffa_checkpoint_dir,
             hf_token=hub_token,
-            full_download=args.full_clothes_download,
             max_workers=args.max_workers,
             progress_interval=args.progress_interval,
         )
-
-    if run_tryon:
-        if tryon_backend == "leffa":
-            clone_repo(settings.leffa_repo_url, settings.leffa_model_dir)
-            download_leffa_checkpoints(
-                repo_id=settings.leffa_hf_repo_id,
-                leffa_repo_dir=settings.leffa_model_dir,
-                checkpoint_dir=settings.leffa_checkpoint_dir,
-                hf_token=hub_token,
-                max_workers=args.max_workers,
-                progress_interval=args.progress_interval,
-            )
-            validate_leffa_assets(settings.leffa_model_dir, settings.leffa_checkpoint_dir)
-            logger.info(
-                "Leffa assets validated: repo=%s checkpoints=%s",
-                settings.leffa_model_dir,
-                settings.leffa_checkpoint_dir,
-            )
-        elif tryon_backend == "fashn_vton":
-            clone_repo(settings.fashn_repo_url, settings.fashn_model_dir)
-            download_fashn_weights(settings.fashn_weights_dir, hf_token=hub_token)
-            warmup_fashn_parser_cache(skip_warmup=args.skip_parser_warmup)
-            validate_tryon_assets(settings.fashn_model_dir, settings.fashn_weights_dir)
-            logger.info(
-                "FASHN assets validated: repo=%s weights=%s",
-                settings.fashn_model_dir,
-                settings.fashn_weights_dir,
-            )
-        else:
-            raise RuntimeError(f"Unsupported try-on backend: {tryon_backend}")
+        validate_leffa_assets(settings.leffa_model_dir, settings.leffa_checkpoint_dir)
+        logger.info(
+            "Leffa assets validated: repo=%s checkpoints=%s",
+            settings.leffa_model_dir,
+            settings.leffa_checkpoint_dir,
+        )
+    elif tryon_backend == "fashn_vton":
+        clone_repo(settings.fashn_repo_url, settings.fashn_model_dir)
+        download_fashn_weights(settings.fashn_weights_dir, hf_token=hub_token)
+        warmup_fashn_parser_cache(skip_warmup=args.skip_parser_warmup)
+        validate_tryon_assets(settings.fashn_model_dir, settings.fashn_weights_dir)
+        logger.info(
+            "FASHN assets validated: repo=%s weights=%s",
+            settings.fashn_model_dir,
+            settings.fashn_weights_dir,
+        )
+    else:
+        raise RuntimeError(f"Unsupported try-on backend: {tryon_backend}")
 
     print("\nSetup completed successfully. Next steps:")
     print("1. Install dependencies if needed:")

@@ -20,7 +20,7 @@ settings = get_settings()
 
 app = FastAPI(
     title="virtual-tryon-ai-mvp",
-    description="Two-stage AI virtual try-on MVP (SDXL cloth generation + Leffa try-on backend)",
+    description="Two-stage AI virtual try-on MVP (Flux cloth generation + Hugging Face Space try-on backend)",
     version="0.1.0",
 )
 

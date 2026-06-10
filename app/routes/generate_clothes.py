@@ -1,4 +1,4 @@
-"""Routes for SDXL garment generation."""
+"""Routes for garment generation."""
 
 from __future__ import annotations
 

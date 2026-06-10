@@ -26,23 +26,18 @@ For a demo, keep the backend only in Colab first. Add the Next.js frontend later
 ## Before You Start
 
 - You need a Google account
-- If the model repo is gated, you may need a Hugging Face token
-- In Colab, choose a GPU runtime before installing dependencies
-- Keep one request active at a time so SDXL and try-on do not compete for VRAM
+- You need a Hugging Face token for hosted cloth generation
+- Flux may require accepting the model conditions
+- A GPU runtime is no longer required for the default hosted model setup
 
 Suggested Colab GPU settings:
 
-- `DEVICE=auto`
-- `NON_CUDA_FORCE_FAST_LIMITS=true`
 - `count=1`
-- `width=768`
+- `width=1024`
 - `height=1024`
-- `num_inference_steps=30`
-- `LEFFA_NUM_INFERENCE_STEPS=30`
-- `LEFFA_GUIDANCE_SCALE=2.5`
-- `LEFFA_MODEL_TYPE=auto`
-- `LEFFA_REQUIRE_CUDA=true`
-- `LEFFA_MEMORY_EFFICIENT_LOAD=true`
+- `num_inference_steps=4`
+- `CLOTH_INFERENCE_PROVIDER=nscale`
+- `TRYON_BACKEND=huggingface_space`
 
 ## Colab Notebook Cells
 
@@ -66,46 +61,19 @@ If Colab asks for more packages during the try-on stage, install them there rath
 ### 3) Set environment variables
 
 ```bash
-%env DEVICE=auto
-%env NON_CUDA_FORCE_FAST_LIMITS=true
-%env CLOTH_MODEL_ID=stabilityai/stable-diffusion-xl-base-1.0
-%env TRYON_BACKEND=leffa
-%env LEFFA_NUM_INFERENCE_STEPS=30
-%env LEFFA_GUIDANCE_SCALE=2.5
-%env LEFFA_MODEL_TYPE=auto
-%env LEFFA_REPAINT=false
-%env LEFFA_REQUIRE_CUDA=true
-%env LEFFA_MEMORY_EFFICIENT_LOAD=true
-%env CLOTH_UNLOAD_AFTER_REQUEST=true
-%env MODEL_CACHE_DIR=models/huggingface
+%env HF_TOKEN=your_hugging_face_token
+%env CLOTH_MODEL_ID=black-forest-labs/FLUX.1-schnell
+%env CLOTH_INFERENCE_PROVIDER=nscale
+%env TRYON_BACKEND=huggingface_space
+%env TRYON_SPACE_ID=yisol/IDM-VTON
+%env TRYON_SPACE_API_NAME=/tryon
 %env OUTPUT_DIR=outputs
 %env UPLOAD_DIR=uploads
 ```
 
-If Colab reports CUDA out-of-memory during cloth generation, add:
+### 4) Skip local model downloads
 
-```bash
-%env CLOTH_ENABLE_MODEL_CPU_OFFLOAD=true
-```
-
-If needed:
-
-```bash
-%env HF_TOKEN=your_hugging_face_token
-```
-
-### 4) Download model assets
-
-```bash
-!python scripts/download_models.py
-```
-
-If you want to split setup into two phases:
-
-```bash
-!python scripts/download_models.py --only-clothes
-!python scripts/download_models.py --only-tryon
-```
+The default cloth generation and try-on backends both run on Hugging Face-hosted services, so there are no local model weights to download.
 
 ### 5) Start the backend
 
@@ -121,12 +89,11 @@ Colab will keep this running in the cell output. In a new cell, you can test the
 !curl http://127.0.0.1:8000/health
 ```
 
-For Colab GPU quality, the health response should include `"device":"cuda"` and `"cuda_available":true`.
-If it reports `"device":"cpu"`, switch the notebook runtime to a GPU runtime and restart from the install cell.
+For the default hosted setup, local device values are informational only.
 
 ### 7) Try garment generation
 
-Use the async job endpoint when calling through a public tunnel. It avoids the 120-second proxy timeout while SDXL is still working.
+Use the async job endpoint when calling through a public tunnel. It avoids proxy timeouts while image generation is still working.
 
 ```bash
 !curl -X POST http://127.0.0.1:8000/generate-clothes-jobs \
@@ -135,10 +102,10 @@ Use the async job endpoint when calling through a public tunnel. It avoids the 1
     "prompt": "oversized black hoodie with minimal logo",
     "category": "hoodie",
     "count": 1,
-    "width": 768,
+    "width": 1024,
     "height": 1024,
-    "guidance_scale": 7.0,
-    "num_inference_steps": 30,
+    "guidance_scale": 0.0,
+    "num_inference_steps": 4,
     "seed": 123
   }'
 ```
@@ -210,17 +177,14 @@ For this project:
 ## Good Demo Limits
 
 - Keep `count=1`
-- Keep cloth generation near `768x1024` with 30 steps on Colab GPU
-- Keep Leffa try-on at 30 steps for balanced quality, or 50 steps if you have enough time and VRAM
+- Keep cloth generation near `1024x1024` with 4 steps
+- Try-on runs on the configured Hugging Face Space
 - Prefer one request at a time
-
-For CPU fallback, use `DEVICE=cpu`, `width=512`, `height=768`, and `num_inference_steps=14`.
 
 ## Common Failure Fixes
 
-- If the model cache is incomplete, rerun `python scripts/download_models.py`
-- If try-on fails, rerun `python scripts/download_models.py --only-tryon`
+- If cloth generation fails, confirm `HF_TOKEN` is set and the `nscale` provider can serve `black-forest-labs/FLUX.1-schnell`
+- If try-on fails, check the Hugging Face Space status and `HF_TOKEN` if you configured a private Space
 - If a public tunnel shows a 120-second proxy timeout, use `/generate-clothes-jobs` and poll the returned job id instead of calling `/generate-clothes`.
-- If generation logs `resolution downscaled from 768x1024`, `/health` is probably reporting CPU; enable a Colab GPU runtime or set `NON_CUDA_FORCE_FAST_LIMITS=false` only if you accept slow CPU generation.
 - If Colab disconnects, restart the notebook cell sequence from the top
 - If responses are slow, lower steps or use smaller images

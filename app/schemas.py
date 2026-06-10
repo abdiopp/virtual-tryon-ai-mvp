@@ -32,10 +32,10 @@ class GenerateClothesRequest(BaseModel):
     category: str | None = None
     negative_prompt: str | None = None
     count: int = Field(default=1, ge=1, le=8)
-    width: int = Field(default=768, ge=256, le=1536)
+    width: int = Field(default=1024, ge=256, le=1536)
     height: int = Field(default=1024, ge=256, le=1536)
-    guidance_scale: float = Field(default=7.0, ge=0.0, le=20.0)
-    num_inference_steps: int = Field(default=30, ge=1, le=100)
+    guidance_scale: float = Field(default=0.0, ge=0.0, le=20.0)
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: int | None = None
 
 
